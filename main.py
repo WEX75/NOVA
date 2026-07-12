@@ -281,6 +281,14 @@ def _install_signal_handlers(stop: threading.Event) -> dict:
     return previous
 
 
+class _NullInbox:
+    """Stand-in when Outlook cannot be constructed: the loop keeps serving
+    approvals/resumes, just with no mail to ingest."""
+
+    def fetch_unread(self, limit: int = 10) -> list:
+        return []
+
+
 def _sleep_unless_stopped(stop: threading.Event, seconds: float) -> None:
     """Wait in small slices: a signal handler sets the event from this same
     thread, which one long Event.wait would not reliably notice."""
@@ -309,8 +317,16 @@ def loop(app, backlog: Backlog, quota: QuotaTracker, interval: float,
     previous_handlers = _install_signal_handlers(stop)
     try:
         if client is None:
-            from outlook import OutlookClient  # deferred: needs NOVA_MS_CLIENT_ID + msal
-            client = OutlookClient()
+            # An unusable Outlook client (e.g. NOVA_MS_CLIENT_ID not yet in
+            # the keyring) must not kill the service: the loop still serves
+            # approval decisions and checkpoint resumes without mail.
+            try:
+                from outlook import OutlookClient  # deferred: needs msal
+                client = OutlookClient()
+            except Exception as e:  # noqa: BLE001
+                log.error("outlook client unavailable (%s) — running without "
+                          "mail ingestion; approvals and resumes still served", e)
+                client = _NullInbox()
 
         quota = resume_incomplete(app, backlog, quota, stop, headless=headless)
 

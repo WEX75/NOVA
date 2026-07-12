@@ -211,6 +211,24 @@ def test_loop_tick_logs_liveness_and_quota(temp_backlog, fake_llm, caplog):
         temp_backlog.tasks_with_status("done")[0].task_id).status == "done"
 
 
+def test_loop_survives_an_unconstructable_outlook_client(temp_backlog, caplog,
+                                                         monkeypatch):
+    """No NOVA_MS_CLIENT_ID in the keyring must not crash-loop the service —
+    approvals and resumes still run, just without mail ingestion."""
+    import outlook
+
+    def boom(*a, **kw):
+        raise RuntimeError("NOVA_MS_CLIENT_ID not in keyring")
+    monkeypatch.setattr(outlook, "OutlookClient", boom)
+
+    with caplog.at_level(logging.INFO, logger="nova"):
+        manager.loop(build_graph(), temp_backlog, QuotaTracker(),
+                     interval=0, client=None, max_ticks=2)
+
+    assert "outlook client unavailable" in caplog.text
+    assert "tick 2" in caplog.text                    # loop alive without mail
+
+
 def test_loop_survives_a_failing_outlook_fetch(temp_backlog, caplog):
     class BrokenInbox:
         def fetch_unread(self, limit=10):
