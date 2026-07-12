@@ -1,0 +1,41 @@
+# NOVA — persistent loop as a systemd USER service.
+#
+# Install:  cp nova.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+#           systemctl --user enable --now nova
+# Logs:     journalctl --user -u nova -f     (tick lines = liveness + quota)
+#
+# NOTE Ollama ordering: ollama runs as a SYSTEM service, and user units
+# cannot declare After= on system units — so there is deliberately no
+# dependency here. nova's preflight retries an unreachable Ollama for
+# NOVA_PREFLIGHT_WINDOW (default 90s) before exiting, which is what makes
+# the StartLimit numbers below safe (see analysis in main.py).
+#
+# NOTE keyring: credentials come from the Secret Service (SecretStore), which
+# needs the user's D-Bus session and an unlocked keyring — both exist after
+# login when default.target is up. If nova ever moves to a lingering/headless
+# setup, the keyring unlock has to be solved first.
+
+[Unit]
+Description=NOVA autonomous business assistant (persistent loop)
+# 5 start attempts per 300s. Sane ONLY combined with preflight's 90s retry
+# window: a failing start then takes >=90s, so 5 attempts span >=500s and the
+# budget cannot be exhausted by an Ollama boot race. Without the backoff,
+# five instant exits would burn the budget in seconds — do not remove one
+# without the other.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+WorkingDirectory=/home/wex/NOVA
+ExecStart=/home/wex/NOVA/.venv/bin/python /home/wex/NOVA/main.py loop --interval 300
+Restart=on-failure
+RestartSec=10
+# SIGTERM is the graceful path (checkpoint, then exit 0); give it time to
+# finish the LLM call in flight before systemd escalates to SIGKILL.
+TimeoutStopSec=120
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
