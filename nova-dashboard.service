@@ -1,0 +1,25 @@
+# NOVA dashboard — optional companion user service to nova.service.
+#
+# Install:  cp nova-dashboard.service ~/.config/systemd/user/
+#           systemctl --user daemon-reload && systemctl --user enable --now nova-dashboard
+# Open:     http://127.0.0.1:8765
+#
+# Binds 127.0.0.1 only (hard-coded in dashboard.py). Reads the same SQLite
+# DB as the loop; approve/reject buttons write approval_decisions — the
+# same path as `nova approve` (project guide §13). No model access, no
+# preflight, so no StartLimit coupling with Ollama is needed here.
+
+[Unit]
+Description=NOVA local dashboard (127.0.0.1:8765)
+
+[Service]
+Type=exec
+WorkingDirectory=/home/wex/NOVA
+ExecStart=/home/wex/NOVA/.venv/bin/python /home/wex/NOVA/main.py dashboard --port 8765
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

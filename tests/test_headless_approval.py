@@ -67,21 +67,44 @@ def test_notification_body_is_sanitized_and_truncated(temp_backlog):
     assert len(body) < 200                            # truncated (before escaping)
 
 
-def test_real_notify_send_is_audit_logged(temp_backlog, monkeypatch):
-    recorded = {}
-
-    def fake_run(cmd, **kw):
-        recorded["cmd"] = cmd
-        return subprocess.CompletedProcess(cmd, 0)
-    monkeypatch.setattr(manager.subprocess, "run", fake_run)
-
+def test_notify_gate_is_audit_logged_with_escaped_body(temp_backlog,
+                                                       quiet_notifications):
     manager.notify_gate("t-n1", "approval requested: <open> the & thing")
 
-    assert recorded["cmd"][0] == "notify-send"
-    assert "t-n1" in recorded["cmd"][2]               # task_id in the title
-    assert "&lt;open&gt;" in recorded["cmd"][3]       # body escaped
+    title, body = quiet_notifications[-1]
+    assert "t-n1" in title                            # task_id in the title
+    assert "&lt;open&gt;" in body                     # body escaped
     assert any(e["action_type"] == "notification"
                for e in temp_backlog.log_entries(task_id="t-n1"))
+
+
+def test_headless_completion_sends_a_result_notification(temp_backlog, fake_llm,
+                                                         monkeypatch,
+                                                         quiet_notifications):
+    """'Pop-ups when nova talks to me': terminal states notify too, not just
+    gates — but only in headless mode (a console user is already watching)."""
+    app = build_graph()
+    task_id, _ = _park_headless(app, temp_backlog, fake_llm, monkeypatch)
+    temp_backlog.record_decision(task_id, approved=True)
+    fake_llm.reply = TRIAGED
+
+    manager.apply_pending_decisions(app, temp_backlog, QuotaTracker())
+
+    assert temp_backlog.get_task(task_id).status == "done"
+    assert any("task done" in title and task_id in title
+               for title, _ in quiet_notifications)
+
+
+def test_console_completion_stays_silent(temp_backlog, fake_llm, monkeypatch,
+                                         quiet_notifications):
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+    fake_llm.reply = TRIAGED
+    state = ingest_email(FLAGGED, temp_backlog)
+
+    manager.run_task(build_graph(), temp_backlog, state, QuotaTracker())
+
+    assert temp_backlog.get_task(state.task_id).status == "done"
+    assert quiet_notifications == []                  # console mode: no pop-ups
 
 
 # --- decisions from another connection / another process -------------------------

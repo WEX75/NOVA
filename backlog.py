@@ -36,6 +36,16 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS runtime_status (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    updated_at TEXT NOT NULL,
+    tick INTEGER NOT NULL,
+    interval_seconds REAL NOT NULL,
+    gemini_used INTEGER NOT NULL,
+    gemini_limit INTEGER NOT NULL,
+    groq_used INTEGER NOT NULL,
+    groq_limit INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS approval_decisions (
     task_id TEXT PRIMARY KEY,
     approved INTEGER NOT NULL,
@@ -162,6 +172,28 @@ class Backlog:
             (message_id, task_id, datetime.now(timezone.utc).isoformat()),
         )
         self._conn.commit()
+
+    # --- loop heartbeat (single row; the dashboard reads liveness/quota) ---
+
+    def write_heartbeat(self, tick: int, interval_seconds: float,
+                        gemini_used: int, gemini_limit: int,
+                        groq_used: int, groq_limit: int) -> None:
+        self._conn.execute(
+            "INSERT INTO runtime_status (id, updated_at, tick, interval_seconds, "
+            "gemini_used, gemini_limit, groq_used, groq_limit) "
+            "VALUES (1,?,?,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, "
+            "tick=excluded.tick, interval_seconds=excluded.interval_seconds, "
+            "gemini_used=excluded.gemini_used, gemini_limit=excluded.gemini_limit, "
+            "groq_used=excluded.groq_used, groq_limit=excluded.groq_limit",
+            (datetime.now(timezone.utc).isoformat(), tick, interval_seconds,
+             gemini_used, gemini_limit, groq_used, groq_limit),
+        )
+        self._conn.commit()
+
+    def read_heartbeat(self) -> Optional[dict]:
+        row = self._conn.execute("SELECT * FROM runtime_status WHERE id=1").fetchone()
+        return dict(row) if row is not None else None
 
     # --- headless approval decisions (project guide §13) ---
     # One-shot `nova approve/reject` processes write here; the running loop

@@ -61,6 +61,17 @@ def temp_secrets(monkeypatch):
     return fake
 
 
+@pytest.fixture(autouse=True)
+def quiet_notifications(monkeypatch):
+    """No test ever fires a real desktop notification; the recorded
+    (title, body) pairs are returned for tests that assert on them."""
+    import main as manager
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(manager, "_dispatch_notification",
+                        lambda title, body: sent.append((title, body)))
+    return sent
+
+
 class _FakeUsage:
     total_tokens = 10
 

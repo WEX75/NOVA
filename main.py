@@ -112,20 +112,34 @@ def _sanitize_notification(text: str, limit: int = 120) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def notify_gate(task_id: str, summary: str) -> None:
-    """Fire-and-forget desktop alert that a task waits at the gate (§13).
-    Deliberately NOT an os_action: a transient system notification, not an
-    app launch — but still an external effect, so audit-logged (§4)."""
-    body = _sanitize_notification(summary)
+def _dispatch_notification(title: str, body: str) -> None:
+    """The actual notify-send call, isolated so tests can silence it."""
     try:
-        subprocess.run(["notify-send", "--app-name=nova",
-                        f"NOVA: approval needed ({task_id})", body],
+        subprocess.run(["notify-send", "--app-name=nova", title, body],
                        check=False, timeout=5, capture_output=True)
     except Exception as e:  # noqa: BLE001 — a failed alert must not affect the task
         log.warning("notify-send failed: %s", e)
+
+
+def _send_notification(task_id: str, title: str, summary: str, reason: str) -> None:
+    """Fire-and-forget desktop alert (§13). Deliberately NOT an os_action:
+    a transient system notification, not an app launch — but still an
+    external effect, so audit-logged (§4)."""
+    body = _sanitize_notification(summary)
+    _dispatch_notification(title, body)
     action_log.log_action(task_id, actor="system", action_type="notification",
-                          detail={"body": body},
-                          reason="task waiting at human gate (headless mode)")
+                          detail={"title": title, "body": body}, reason=reason)
+
+
+def notify_gate(task_id: str, summary: str) -> None:
+    _send_notification(task_id, f"NOVA: approval needed ({task_id})", summary,
+                       reason="task waiting at human gate (headless mode)")
+
+
+def notify_result(task_id: str, status: str, summary: str) -> None:
+    _send_notification(task_id, f"NOVA: task {status} ({task_id})",
+                       summary or status,
+                       reason=f"task reached terminal state ({status}) in headless mode")
 
 
 def _stream_until_stop(app, payload, cfg, stop: threading.Event | None) -> None:
@@ -190,8 +204,13 @@ def drive_task(app, backlog: Backlog, task_id: str, quota: QuotaTracker,
     final = _snapshot_state(app, cfg)
     if final.status is TaskStatus.DONE:
         backlog.update_status(task_id, "done")
+        if headless:  # console users are already watching; alert the absent owner
+            notify_result(task_id, "done", final.final_output or "")
     elif final.status is TaskStatus.FAILED:
         backlog.update_status(task_id, "failed")
+        if headless:
+            notify_result(task_id, "failed",
+                          final.error_log[-1] if final.error_log else "")
     # Any other status means a shutdown landed mid-flight: the backlog row
     # stays in_progress/needs_approval and resume_incomplete() picks it up.
     return final.quota
@@ -358,6 +377,9 @@ def loop(app, backlog: Backlog, quota: QuotaTracker, interval: float,
                      tick, len(messages), new_tasks, waiting,
                      quota.gemini_requests_today, quota.gemini_daily_limit,
                      quota.groq_requests_today, quota.groq_daily_limit)
+            backlog.write_heartbeat(tick, interval,
+                                    quota.gemini_requests_today, quota.gemini_daily_limit,
+                                    quota.groq_requests_today, quota.groq_daily_limit)
             _sleep_unless_stopped(stop, interval)
 
         log.info("loop stopped after %d tick(s) — in-flight work is checkpointed", tick)
@@ -415,6 +437,8 @@ def main(argv: list[str] | None = None) -> int:
     p_approve.add_argument("task_id")
     p_reject = sub.add_parser("reject", help="reject a task waiting at the human gate")
     p_reject.add_argument("task_id")
+    p_dash = sub.add_parser("dashboard", help="local web dashboard (127.0.0.1 only)")
+    p_dash.add_argument("--port", type=int, default=8765)
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, stream=sys.stdout,
@@ -428,6 +452,12 @@ def main(argv: list[str] | None = None) -> int:
         # Deliberately BEFORE preflight: deciding must not require Ollama.
         return record_owner_decision(backlog, args.task_id,
                                      approved=(args.command == "approve"))
+
+    if args.command == "dashboard":
+        # Also before preflight: the dashboard reads the DB and records
+        # decisions — it never talks to a model.
+        import dashboard
+        return dashboard.main(backlog.db_path, port=args.port)
 
     quota = preflight()
 

@@ -1,0 +1,156 @@
+"""
+NOVA — local dashboard (§13 companion).
+
+A read-mostly web UI over the same SQLite DB the loop uses: live activity
+feed (the episodic log), task states, loop heartbeat/quota, and
+approve/reject buttons that write through Backlog.record_decision — the
+same sanctioned §13 path as `nova approve`. It never talks to the running
+loop process and never calls a model.
+
+SECURITY MODEL: binds 127.0.0.1 ONLY (hard-coded, not configurable) — this
+is a single-owner desktop tool; localhost binding is the boundary. Reads
+use per-request read-only SQLite connections; the one write endpoint
+(POST /api/decision) opens a fresh Backlog per request, so no connection
+ever crosses threads.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from backlog import Backlog
+
+_PAGE = Path(__file__).parent / "dashboard.html"
+BIND_HOST = "127.0.0.1"  # never expose beyond the local machine
+
+TERMINAL = ("done", "failed")
+
+
+class _Handler(BaseHTTPRequestHandler):
+    server_version = "nova-dashboard"
+
+    def log_message(self, fmt, *args):  # noqa: A003 — quiet: journald noise
+        pass
+
+    # --- plumbing ---
+
+    def _ro(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(f"file:{self.server.db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _json(self, code: int, payload) -> None:
+        raw = json.dumps(payload).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(raw)
+
+    # --- GET ---
+
+    def do_GET(self):  # noqa: N802 — BaseHTTPRequestHandler API
+        url = urlparse(self.path)
+        params = parse_qs(url.query)
+        if url.path == "/":
+            raw = _PAGE.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+        elif url.path == "/api/overview":
+            self._json(200, self._overview())
+        elif url.path == "/api/tasks":
+            limit = int(params.get("limit", ["50"])[0])
+            self._json(200, self._tasks(limit))
+        elif url.path == "/api/log":
+            after_id = int(params.get("after_id", ["0"])[0])
+            limit = int(params.get("limit", ["100"])[0])
+            self._json(200, self._log(after_id, limit))
+        else:
+            self._json(404, {"error": "not found"})
+
+    def _overview(self) -> dict:
+        with self._ro() as conn:
+            hb_row = conn.execute("SELECT * FROM runtime_status WHERE id=1").fetchone()
+            counts = {r["status"]: r["n"] for r in conn.execute(
+                "SELECT status, COUNT(*) AS n FROM tasks GROUP BY status")}
+        heartbeat = dict(hb_row) if hb_row is not None else None
+        return {"heartbeat": heartbeat, "task_counts": counts}
+
+    def _tasks(self, limit: int) -> list[dict]:
+        with self._ro() as conn:
+            rows = conn.execute(
+                "SELECT t.task_id, t.goal, t.source, t.privacy_sensitive, t.status, "
+                "t.created_at, t.updated_at, "
+                "(SELECT approved FROM approval_decisions d "
+                " WHERE d.task_id = t.task_id AND d.applied_at IS NULL) AS pending_decision "
+                "FROM tasks t ORDER BY t.updated_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def _log(self, after_id: int, limit: int) -> list[dict]:
+        with self._ro() as conn:
+            if after_id > 0:
+                rows = conn.execute(
+                    "SELECT * FROM episodic_log WHERE id > ? ORDER BY id ASC LIMIT ?",
+                    (after_id, limit)).fetchall()
+            else:  # initial load: the most recent entries, oldest-first
+                rows = conn.execute(
+                    "SELECT * FROM (SELECT * FROM episodic_log ORDER BY id DESC LIMIT ?) "
+                    "ORDER BY id ASC", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    # --- POST ---
+
+    def do_POST(self):  # noqa: N802
+        if urlparse(self.path).path != "/api/decision":
+            self._json(404, {"error": "not found"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            data = json.loads(self.rfile.read(length) or b"{}")
+            task_id = str(data["task_id"])
+            approved = bool(data["approved"])
+        except (KeyError, ValueError, json.JSONDecodeError):
+            self._json(400, {"error": "expected JSON {task_id, approved}"})
+            return
+
+        backlog = Backlog(self.server.db_path)  # fresh rw connection per request
+        try:
+            task = backlog.get_task(task_id)
+            if task is None:
+                self._json(404, {"error": f"no such task: {task_id}"})
+                return
+            if task.status in TERMINAL:
+                self._json(409, {"error": f"task is already {task.status}"})
+                return
+            backlog.record_decision(task_id, approved)
+            self._json(200, {"ok": True, "task_id": task_id, "approved": approved})
+        finally:
+            backlog.close()
+
+
+def build_server(db_path, port: int = 8765) -> ThreadingHTTPServer:
+    Backlog(db_path).close()  # ensure the schema exists before read-only opens
+    server = ThreadingHTTPServer((BIND_HOST, port), _Handler)
+    server.db_path = str(db_path)
+    return server
+
+
+def main(db_path, port: int = 8765) -> int:
+    server = build_server(db_path, port)
+    print(f"[nova] dashboard on http://{BIND_HOST}:{server.server_address[1]} "
+          f"(db: {db_path}) — Ctrl-C to stop", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0

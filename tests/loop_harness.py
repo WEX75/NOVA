@@ -80,6 +80,9 @@ os.environ.pop("GROQ_API_KEY", None)
 
 import action_log  # noqa: E402
 import main as manager  # noqa: E402
+
+# Subprocess tests must not fire real desktop notifications either.
+manager._dispatch_notification = lambda title, body: print(f"NOTIFY {title}", flush=True)
 from backlog import Backlog, TaskRecord  # noqa: E402
 from graph import build_graph  # noqa: E402
 from nova_state import NovaState, QuotaTracker  # noqa: E402
