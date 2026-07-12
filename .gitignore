@@ -1,0 +1,15 @@
+# virtualenv + caches
+.venv/
+__pycache__/
+.pytest_cache/
+
+# runtime state (never committed: DBs, checkpoints, vector store, workspace)
+nova.db
+checkpoints.db
+chroma_db/
+workspace/
+
+# legacy plaintext token cache (migrated to keyring; must never be committed)
+.ms_token_cache.json
+
+# local editor/agent settings
