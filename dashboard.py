@@ -7,9 +7,17 @@ approve/reject buttons that write through Backlog.record_decision — the
 same sanctioned §13 path as `nova approve`. It never talks to the running
 loop process and never calls a model.
 
-SECURITY MODEL: binds 127.0.0.1 ONLY (hard-coded, not configurable) — this
-is a single-owner desktop tool; localhost binding is the boundary. Reads
-use per-request read-only SQLite connections; the one write endpoint
+SECURITY MODEL: binds 127.0.0.1 ONLY (hard-coded, not configurable), but
+localhost binding alone is NOT a boundary against the owner's own browser:
+any webpage can make the browser POST to 127.0.0.1 ("simple" cross-origin
+requests skip CORS preflight), and DNS rebinding can point an attacker's
+domain at 127.0.0.1. Two header checks close this:
+  - every request must carry a Host of 127.0.0.1:<port>/localhost:<port>
+    (rejects DNS rebinding, GETs included — the log/tasks are private);
+  - POST requires Content-Type: application/json, which is never a
+    "simple" type — forcing a CORS preflight this server never answers
+    (no CORS headers, no OPTIONS handler, deliberately).
+Reads use per-request read-only SQLite connections; the one write endpoint
 (POST /api/decision) opens a fresh Backlog per request, so no connection
 ever crosses threads.
 """
@@ -38,6 +46,13 @@ class _Handler(BaseHTTPRequestHandler):
 
     # --- plumbing ---
 
+    def _host_ok(self) -> bool:
+        """Only the loopback names for the port actually bound. Anything
+        else is a DNS-rebinding attempt or a misdirected request."""
+        port = self.server.server_address[1]
+        return self.headers.get("Host", "") in (f"127.0.0.1:{port}",
+                                                f"localhost:{port}")
+
     def _ro(self) -> sqlite3.Connection:
         conn = sqlite3.connect(f"file:{self.server.db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
@@ -55,6 +70,9 @@ class _Handler(BaseHTTPRequestHandler):
     # --- GET ---
 
     def do_GET(self):  # noqa: N802 — BaseHTTPRequestHandler API
+        if not self._host_ok():
+            self._json(403, {"error": "bad Host header"})
+            return
         url = urlparse(self.path)
         params = parse_qs(url.query)
         if url.path == "/":
@@ -109,6 +127,16 @@ class _Handler(BaseHTTPRequestHandler):
     # --- POST ---
 
     def do_POST(self):  # noqa: N802
+        if not self._host_ok():
+            self._json(403, {"error": "bad Host header"})
+            return
+        media_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if media_type != "application/json":
+            # A cross-origin "simple" POST (text/plain, form-encoded) never
+            # carries this type; requiring it forces a CORS preflight that
+            # this server never approves.
+            self._json(415, {"error": "Content-Type must be application/json"})
+            return
         if urlparse(self.path).path != "/api/decision":
             self._json(404, {"error": "not found"})
             return

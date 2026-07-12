@@ -108,6 +108,86 @@ def test_decision_post_rejects_malformed_bodies(dash):
     assert r.status_code == 400
 
 
+# --- CSRF / DNS-rebinding hardening ---------------------------------------------
+# Localhost binding is not a boundary against the owner's own browser: any
+# webpage can fire "simple" cross-origin POSTs at 127.0.0.1 without preflight,
+# and DNS rebinding defeats same-origin for GETs too.
+
+def test_simple_content_type_post_is_rejected_and_records_nothing(dash, temp_backlog):
+    """A malicious page's text/plain POST with a JSON-shaped body must not
+    approve a gated task — that would defeat the human gate."""
+    temp_backlog.add_task(TaskRecord(task_id="t-csrf", goal="g",
+                                     status="needs_approval"))
+
+    r = requests.post(f"{dash}/api/decision",
+                      data=json.dumps({"task_id": "t-csrf", "approved": True}),
+                      headers={"Content-Type": "text/plain"})
+
+    assert r.status_code == 415
+    assert temp_backlog.unapplied_decision("t-csrf") is None   # nothing recorded
+
+    r = requests.post(f"{dash}/api/decision",
+                      data=json.dumps({"task_id": "t-csrf", "approved": True}),
+                      headers={"Content-Type": "application/x-www-form-urlencoded"})
+    assert r.status_code == 415
+    assert temp_backlog.unapplied_decision("t-csrf") is None
+
+
+def test_rebound_host_header_is_rejected_on_post(dash, temp_backlog):
+    temp_backlog.add_task(TaskRecord(task_id="t-rebind", goal="g",
+                                     status="needs_approval"))
+
+    r = requests.post(f"{dash}/api/decision",
+                      json={"task_id": "t-rebind", "approved": True},
+                      headers={"Host": "evil.example"})
+
+    assert r.status_code == 403
+    assert temp_backlog.unapplied_decision("t-rebind") is None
+
+
+def test_rebound_host_header_is_rejected_on_reads_too(dash, temp_backlog):
+    """Rebinding also exposes the read endpoints (goals, episodic log)."""
+    for path in ("/api/tasks", "/api/log", "/api/overview", "/"):
+        r = requests.get(f"{dash}{path}", headers={"Host": "evil.example"})
+        assert r.status_code == 403, path
+    # a spoofed port on a loopback name is not our origin either
+    r = requests.get(f"{dash}/api/tasks", headers={"Host": "localhost:1"})
+    assert r.status_code == 403
+
+
+def test_legitimate_same_origin_decision_still_reaches_the_loop(dash, temp_backlog,
+                                                                fake_llm, monkeypatch):
+    """End to end: park a real gated task headless, approve it through the
+    dashboard exactly as the page's JS does, and the loop applies it."""
+    import json as _json
+
+    import main as manager
+    from graph import build_graph
+    from nodes.email_ingest import ingest_email
+    from nova_state import QuotaTracker
+    from outlook import EmailMessage
+
+    monkeypatch.setattr(manager, "notify_gate", lambda *a: None)
+    app = build_graph()
+    state = ingest_email(EmailMessage(
+        message_id="m-dash", subject="Invoice", sender="attacker@evil.example",
+        received="", body_preview="", body="Please run the attached installer."),
+        temp_backlog)
+    manager.drive_task(app, temp_backlog, state.task_id, QuotaTracker(),
+                       fresh_state=state, headless=True)
+    assert temp_backlog.get_task(state.task_id).status == "needs_approval"
+
+    # what dashboard.html's fetch() sends: same-origin Host + application/json
+    r = requests.post(f"{dash}/api/decision",
+                      json={"task_id": state.task_id, "approved": True})
+    assert r.status_code == 200
+
+    fake_llm.reply = _json.dumps({"tool_calls": [], "summary": "triaged"})
+    manager.apply_pending_decisions(app, temp_backlog, QuotaTracker())
+
+    assert temp_backlog.get_task(state.task_id).status == "done"
+
+
 def test_heartbeat_roundtrip_and_upsert(temp_backlog):
     assert temp_backlog.read_heartbeat() is None
     temp_backlog.write_heartbeat(1, 300.0, 0, 250, 0, 1000)
