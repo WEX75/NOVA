@@ -5,10 +5,11 @@ Every node calls `complete()` regardless of backend. This is the ONLY module
 that knows provider strings; nodes know AgentRole, nothing else.
 
 Local backend note (project guide §3): Ollama on this machine (Radeon 780M /
-gfx1103) must run with OLLAMA_VULKAN=1 — gfx1103 is not ROCm-supported and
-without Vulkan it silently falls back to CPU. That env var belongs on the
-`ollama serve` process, not this client, but `assert_local_backend_ready()`
-checks for the common misconfiguration at startup.
+gfx1103, not ROCm-supported) can silently fall back to slow CPU if the iGPU
+isn't picked up. The verified-working service config is OLLAMA_IGPU_ENABLE=1
+on the `ollama serve` process (see §3 — re-verify with `ollama ps` after any
+Ollama upgrade). `assert_local_backend_ready()` checks reachability and the
+embed model at startup.
 """
 
 from __future__ import annotations
@@ -128,8 +129,9 @@ def assert_local_backend_ready() -> None:
         r.raise_for_status()
     except Exception as e:  # noqa: BLE001 — any failure means "not ready"
         raise RuntimeError(
-            f"Ollama not reachable at {OLLAMA_BASE}. Start it with "
-            "OLLAMA_VULKAN=1 (gfx1103 needs the Vulkan backend, see project guide §3)."
+            f"Ollama not reachable at {OLLAMA_BASE}. Start the service with "
+            "OLLAMA_IGPU_ENABLE=1 (gfx1103 iGPU, see project guide §3; verify GPU "
+            "use with `ollama ps`)."
         ) from e
 
     embed_name = EMBED_MODEL.split("/", 1)[1]
