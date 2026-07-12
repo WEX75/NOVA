@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS approval_decisions (
+    task_id TEXT PRIMARY KEY,
+    approved INTEGER NOT NULL,
+    decided_at TEXT NOT NULL,
+    applied_at TEXT
+);
 CREATE TABLE IF NOT EXISTS ingested_emails (
     message_id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL,
@@ -154,6 +160,46 @@ class Backlog:
         self._conn.execute(
             "INSERT INTO ingested_emails VALUES (?,?,?)",
             (message_id, task_id, datetime.now(timezone.utc).isoformat()),
+        )
+        self._conn.commit()
+
+    # --- headless approval decisions (project guide §13) ---
+    # One-shot `nova approve/reject` processes write here; the running loop
+    # polls and applies on its tick cadence. No stdin involved anywhere.
+
+    def record_decision(self, task_id: str, approved: bool) -> None:
+        """Last decision wins, and re-deciding re-opens an applied row —
+        a task can legitimately reach the gate more than once."""
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "INSERT INTO approval_decisions (task_id, approved, decided_at, applied_at) "
+            "VALUES (?,?,?,NULL) "
+            "ON CONFLICT(task_id) DO UPDATE SET approved=excluded.approved, "
+            "decided_at=excluded.decided_at, applied_at=NULL",
+            (task_id, int(approved), now),
+        )
+        self._conn.commit()
+        self.log(EpisodicEntry(task_id=task_id, actor="human",
+                               action_type="approval_decision",
+                               detail={"approved": approved},
+                               reason="owner decision recorded by nova approve/reject"))
+
+    def unapplied_decision(self, task_id: str) -> Optional[bool]:
+        row = self._conn.execute(
+            "SELECT approved FROM approval_decisions "
+            "WHERE task_id=? AND applied_at IS NULL", (task_id,)).fetchone()
+        return bool(row["approved"]) if row is not None else None
+
+    def unapplied_decisions(self) -> list[tuple[str, bool]]:
+        rows = self._conn.execute(
+            "SELECT task_id, approved FROM approval_decisions "
+            "WHERE applied_at IS NULL ORDER BY decided_at").fetchall()
+        return [(r["task_id"], bool(r["approved"])) for r in rows]
+
+    def mark_decision_applied(self, task_id: str) -> None:
+        self._conn.execute(
+            "UPDATE approval_decisions SET applied_at=? WHERE task_id=?",
+            (datetime.now(timezone.utc).isoformat(), task_id),
         )
         self._conn.commit()
 

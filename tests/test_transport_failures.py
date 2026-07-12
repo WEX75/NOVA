@@ -91,7 +91,8 @@ def test_loop_survives_a_mid_task_outage_and_escalates(temp_backlog, fake_llm,
 
     with caplog.at_level(logging.INFO, logger="nova"):
         manager.loop(build_graph(), temp_backlog, QuotaTracker(),
-                     interval=0, client=inbox, max_ticks=2)
+                     interval=0, client=inbox, max_ticks=2,
+                     headless=False)               # console mode: prompt + reject
 
     assert temp_backlog.get_task(
         temp_backlog.tasks_with_status("failed")[0].task_id).status == "failed"

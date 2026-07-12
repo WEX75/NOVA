@@ -26,6 +26,7 @@ import argparse
 import logging
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -99,6 +100,34 @@ def ask_owner(summary: str) -> bool:
     return answer.strip().lower() in ("y", "yes")
 
 
+def _sanitize_notification(text: str, limit: int = 120) -> str:
+    """Untrusted content reaches gate summaries (email subjects live in task
+    goals), so the notification body is flattened to printable single-line
+    text, truncated, then markup-escaped — several notification daemons
+    render the body as Pango markup."""
+    text = "".join(ch if ch.isprintable() else " " for ch in text)
+    text = " ".join(text.split())
+    if len(text) > limit:
+        text = text[:limit] + "…"
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def notify_gate(task_id: str, summary: str) -> None:
+    """Fire-and-forget desktop alert that a task waits at the gate (§13).
+    Deliberately NOT an os_action: a transient system notification, not an
+    app launch — but still an external effect, so audit-logged (§4)."""
+    body = _sanitize_notification(summary)
+    try:
+        subprocess.run(["notify-send", "--app-name=nova",
+                        f"NOVA: approval needed ({task_id})", body],
+                       check=False, timeout=5, capture_output=True)
+    except Exception as e:  # noqa: BLE001 — a failed alert must not affect the task
+        log.warning("notify-send failed: %s", e)
+    action_log.log_action(task_id, actor="system", action_type="notification",
+                          detail={"body": body},
+                          reason="task waiting at human gate (headless mode)")
+
+
 def _stream_until_stop(app, payload, cfg, stop: threading.Event | None) -> None:
     """Advance the graph node by node. A stop request exits after the node in
     flight completes — LangGraph has already checkpointed that node's output,
@@ -110,11 +139,20 @@ def _stream_until_stop(app, payload, cfg, stop: threading.Event | None) -> None:
 
 def drive_task(app, backlog: Backlog, task_id: str, quota: QuotaTracker,
                stop: threading.Event | None = None,
-               fresh_state: NovaState | None = None) -> QuotaTracker:
+               fresh_state: NovaState | None = None,
+               headless: bool = False) -> QuotaTracker:
     """Drive one task from wherever it stands (a fresh state, or its existing
     checkpoint when fresh_state is None) toward a terminal state, pausing for
     owner decisions at every interrupt. Honors `stop` between graph steps:
     on shutdown the task lands checkpointed and resumable, never half-dead.
+
+    Interrupt handling has two modes (§13):
+      console (headless=False)  — block on ask_owner(); EOF = rejection.
+      headless (headless=True)  — apply a decision already recorded via
+        `nova approve/reject` if one exists; otherwise park the task as
+        needs_approval, fire a desktop notification, and return. No stdin
+        dependency anywhere on this path.
+
     Returns the updated day-quota (shared across tasks; each task's state
     carries a copy seeded here)."""
     cfg = {"configurable": {"thread_id": task_id}}
@@ -131,8 +169,22 @@ def drive_task(app, backlog: Backlog, task_id: str, quota: QuotaTracker,
     while interrupted(app, cfg):
         if stop is not None and stop.is_set():
             backlog.update_status(task_id, "needs_approval")
-            log.info("task %s parked at the human gate — will re-ask after restart", task_id)
+            log.info("task %s parked at the human gate (shutdown requested)", task_id)
             break
+        if headless:
+            decision = backlog.unapplied_decision(task_id)
+            if decision is None:
+                backlog.update_status(task_id, "needs_approval")
+                notify_gate(task_id, pending_decision(app, cfg))
+                log.info("task %s waiting at the human gate — decide with: "
+                         "nova approve %s | nova reject %s",
+                         task_id, task_id, task_id)
+                break
+            resume_with_decision(app, cfg, approved=decision)
+            backlog.mark_decision_applied(task_id)
+            log.info("task %s: applied recorded owner decision (%s)",
+                     task_id, "approved" if decision else "rejected")
+            continue
         resume_with_decision(app, cfg, approved=ask_owner(pending_decision(app, cfg)))
 
     final = _snapshot_state(app, cfg)
@@ -151,11 +203,14 @@ def run_task(app, backlog: Backlog, state: NovaState, quota: QuotaTracker) -> Qu
 
 
 def resume_incomplete(app, backlog: Backlog, quota: QuotaTracker,
-                      stop: threading.Event | None = None) -> QuotaTracker:
+                      stop: threading.Event | None = None,
+                      headless: bool = False) -> QuotaTracker:
     """Pick up tasks a previous process left mid-flight or parked at the gate.
     Only a checkpoint can be resumed safely — it carries the approval flags
     and artifact provenance that the tasks table deliberately does not — so a
-    task without one is marked failed, loudly, for the owner to re-issue."""
+    task without one is marked failed, loudly, for the owner to re-issue.
+    In headless mode a still-undecided parked task re-notifies and stays
+    parked; a recorded decision is applied immediately."""
     for task in backlog.tasks_with_status("in_progress", "needs_approval"):
         if stop is not None and stop.is_set():
             break
@@ -166,20 +221,44 @@ def resume_incomplete(app, backlog: Backlog, quota: QuotaTracker,
             backlog.update_status(task.task_id, "failed")
             continue
         log.info("resuming task %s from its checkpoint", task.task_id)
-        quota = _drive_guarded(app, backlog, task.task_id, quota, stop=stop)
+        quota = _drive_guarded(app, backlog, task.task_id, quota,
+                               stop=stop, headless=headless)
+    return quota
+
+
+def apply_pending_decisions(app, backlog: Backlog, quota: QuotaTracker,
+                            stop: threading.Event | None = None) -> QuotaTracker:
+    """Apply owner decisions recorded by one-shot `nova approve/reject`
+    processes since the last tick (§13). A decision for a task not yet at
+    the gate stays pending (it may arrive there soon); a decision for a
+    terminal or unknown task is discarded loudly."""
+    for task_id, _approved in backlog.unapplied_decisions():
+        if stop is not None and stop.is_set():
+            break
+        task = backlog.get_task(task_id)
+        if task is None or task.status in ("done", "failed"):
+            log.warning("decision for task %s discarded — %s", task_id,
+                        "no such task" if task is None else f"task is already {task.status}")
+            backlog.mark_decision_applied(task_id)
+            continue
+        cfg = {"configurable": {"thread_id": task_id}}
+        if not app.get_state(cfg).values or not interrupted(app, cfg):
+            continue  # not waiting at the gate (yet) — keep the decision pending
+        quota = _drive_guarded(app, backlog, task_id, quota, stop=stop, headless=True)
     return quota
 
 
 def _drive_guarded(app, backlog: Backlog, task_id: str, quota: QuotaTracker,
                    stop: threading.Event | None = None,
-                   fresh_state: NovaState | None = None) -> QuotaTracker:
+                   fresh_state: NovaState | None = None,
+                   headless: bool = False) -> QuotaTracker:
     """Daemon-mode wrapper: a raising task must never take the loop down.
     Transport failures are already absorbed inside the nodes; anything that
     still raises here is a genuine bug — log it loudly, leave the task's
     checkpoint for the next start, keep serving other tasks."""
     try:
         return drive_task(app, backlog, task_id, quota,
-                          stop=stop, fresh_state=fresh_state)
+                          stop=stop, fresh_state=fresh_state, headless=headless)
     except Exception:  # noqa: BLE001 — last resort, deliberately broad
         log.exception("task %s raised out of the graph — leaving its checkpoint "
                       "in place and moving on", task_id)
@@ -212,25 +291,33 @@ def _sleep_unless_stopped(stop: threading.Event, seconds: float) -> None:
 
 def loop(app, backlog: Backlog, quota: QuotaTracker, interval: float,
          limit: int = 10, client=None, stop: threading.Event | None = None,
-         max_ticks: int | None = None) -> QuotaTracker:
-    """Persistent mode. Each tick: poll the inbox, quarantine-ingest and run
-    new mail one message at a time — a task is only created immediately
-    before it starts running, so a shutdown can never strand an ingested-but-
-    never-started task (its mail simply comes back next poll, un-deduped).
-    The tick log line is the liveness/ops signal: unread seen, tasks created,
-    quota standing."""
+         max_ticks: int | None = None,
+         headless: bool | None = None) -> QuotaTracker:
+    """Persistent mode. Each tick: apply any recorded approval decisions
+    (§13), then poll the inbox, quarantine-ingest and run new mail one
+    message at a time — a task is only created immediately before it starts
+    running, so a shutdown can never strand an ingested-but-never-started
+    task (its mail simply comes back next poll, un-deduped). The tick log
+    line is the liveness/ops signal: unread seen, tasks created, gates
+    waiting, quota standing.
+
+    headless=None auto-detects: no tty on stdin (the systemd case) means
+    approvals come from `nova approve/reject`, never from input()."""
     stop = stop or threading.Event()
+    if headless is None:
+        headless = not sys.stdin.isatty()
     previous_handlers = _install_signal_handlers(stop)
     try:
         if client is None:
             from outlook import OutlookClient  # deferred: needs NOVA_MS_CLIENT_ID + msal
             client = OutlookClient()
 
-        quota = resume_incomplete(app, backlog, quota, stop)
+        quota = resume_incomplete(app, backlog, quota, stop, headless=headless)
 
         tick = 0
         while not stop.is_set() and (max_ticks is None or tick < max_ticks):
             tick += 1
+            quota = apply_pending_decisions(app, backlog, quota, stop)
             try:
                 messages = client.fetch_unread(limit=limit)
             except Exception as e:  # noqa: BLE001 — one bad poll must not kill the loop
@@ -246,11 +333,13 @@ def loop(app, backlog: Backlog, quota: QuotaTracker, interval: float,
                 state = ingest_email(msg, backlog)
                 new_tasks += 1
                 quota = _drive_guarded(app, backlog, state.task_id, quota,
-                                       stop=stop, fresh_state=state)
+                                       stop=stop, fresh_state=state,
+                                       headless=headless)
 
-            log.info("tick %d: %d unread fetched, %d new task(s); "
-                     "quota gemini %d/%d, groq %d/%d",
-                     tick, len(messages), new_tasks,
+            waiting = len(backlog.tasks_with_status("needs_approval"))
+            log.info("tick %d: %d unread fetched, %d new task(s), "
+                     "%d awaiting approval; quota gemini %d/%d, groq %d/%d",
+                     tick, len(messages), new_tasks, waiting,
                      quota.gemini_requests_today, quota.gemini_daily_limit,
                      quota.groq_requests_today, quota.groq_daily_limit)
             _sleep_unless_stopped(stop, interval)
@@ -278,6 +367,23 @@ def run_manual_goal(app, backlog: Backlog, goal: str, quota: QuotaTracker) -> Qu
     return run_task(app, backlog, state, quota)
 
 
+def record_owner_decision(backlog: Backlog, task_id: str, approved: bool) -> int:
+    """`nova approve/reject <task_id>` — one-shot, no Ollama/preflight needed:
+    writes the decision row; the running loop applies it on its next tick."""
+    task = backlog.get_task(task_id)
+    if task is None:
+        print(f"[nova] no such task: {task_id}", file=sys.stderr)
+        return 1
+    if task.status in ("done", "failed"):
+        print(f"[nova] task {task_id} is already {task.status} — nothing to decide",
+              file=sys.stderr)
+        return 1
+    backlog.record_decision(task_id, approved)
+    print(f"[nova] {'approval' if approved else 'rejection'} recorded for {task_id}; "
+          "the loop applies it on its next tick")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nova")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -289,6 +395,10 @@ def main(argv: list[str] | None = None) -> int:
     p_loop.add_argument("--interval", type=float, default=300.0,
                         help="seconds between polls (default 300)")
     p_loop.add_argument("--limit", type=int, default=10)
+    p_approve = sub.add_parser("approve", help="approve a task waiting at the human gate")
+    p_approve.add_argument("task_id")
+    p_reject = sub.add_parser("reject", help="reject a task waiting at the human gate")
+    p_reject.add_argument("task_id")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, stream=sys.stdout,
@@ -297,6 +407,12 @@ def main(argv: list[str] | None = None) -> int:
 
     backlog = Backlog()
     action_log.configure(backlog)
+
+    if args.command in ("approve", "reject"):
+        # Deliberately BEFORE preflight: deciding must not require Ollama.
+        return record_owner_decision(backlog, args.task_id,
+                                     approved=(args.command == "approve"))
+
     quota = preflight()
 
     if args.command == "loop":
