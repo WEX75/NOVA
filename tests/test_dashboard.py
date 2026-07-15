@@ -31,9 +31,24 @@ def test_binds_localhost_only(dash, temp_backlog):
 
 
 def test_root_serves_the_page(dash):
+    """Sanity check on the shipped UI, not a screenshot test: the page loads,
+    is self-contained (no external resources), and wires up every endpoint
+    plus the headline features (theme persistence, approvals, feed)."""
     r = requests.get(f"{dash}/")
     assert r.status_code == 200
-    assert "NOVA" in r.text and "api/overview" in r.text
+    assert r.headers["Content-Type"].startswith("text/html")
+    page = r.text
+    assert "NOVA" in page
+    # every API endpoint the backend serves is actually used by the page
+    for endpoint in ("api/overview", "api/tasks", "api/log", "/api/decision"):
+        assert endpoint in page, endpoint
+    # headline UI features
+    assert "nova-theme" in page                  # dark/light choice persisted
+    assert "Awaiting Your Decision" in page
+    assert "Activity Feed" in page
+    # self-contained: nothing fetched from the network but our own API
+    assert "http://" not in page.replace("http://www.w3.org", "")
+    assert "https://" not in page
 
 
 def test_overview_reports_heartbeat_and_task_counts(dash, temp_backlog):

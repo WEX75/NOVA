@@ -3,272 +3,1382 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NOVA</title>
+<title>NOVA · dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%2306b6d4' d='M12 2l2.2 7.8L22 12l-7.8 2.2L12 22l-2.2-7.8L2 12l7.8-2.2z'/%3E%3C/svg%3E">
+
+<!-- ================================================================
+     Theme bootstrap — runs before first paint so there is no flash.
+     Dark is the CSS default; "light" is applied as a data attribute.
+     Manual choice persists in localStorage("nova-theme"); with no
+     stored choice we follow the OS preference (and track changes).
+     ================================================================ -->
+<script>
+(function () {
+  var t = null;
+  try { t = localStorage.getItem("nova-theme"); } catch (e) { /* private mode */ }
+  if (t !== "light" && t !== "dark") {
+    t = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+      ? "light" : "dark";
+  }
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+
 <style>
-  :root {
-    --page:    #f9f9f7;  --surface: #fcfcfb;
-    --ink:     #0b0b0b;  --ink-2:   #52514e;  --ink-3: #898781;
-    --line:    #e1e0d9;
-    --accent:  #2a78d6;
-    --good:    #0ca30c;  --warning: #fab219;
-    --serious: #ec835a;  --critical:#d03b3b;
+/* ================================================================
+   Design tokens — dark theme is the base, light overrides below.
+   Palette: cyan primary, green success, amber warning, red error.
+   Status colors always ship with a text label, never color alone.
+   ================================================================ */
+:root {
+  color-scheme: dark;
+
+  --bg: #070b12;
+  --glow-1: rgba(6, 182, 212, 0.16);
+  --glow-2: rgba(139, 92, 246, 0.13);
+  --glow-3: rgba(16, 185, 129, 0.09);
+
+  --text:   #e8edf4;
+  --text-2: #a4afc1;
+  --text-3: #7d8aa3;
+
+  --glass:          rgba(255, 255, 255, 0.055);
+  --glass-2:        rgba(255, 255, 255, 0.09);
+  --glass-border:   rgba(255, 255, 255, 0.11);
+  --glass-border-2: rgba(255, 255, 255, 0.20);
+  --shadow:    0 8px 32px rgba(0, 0, 0, 0.35);
+  --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.25);
+  --track: rgba(255, 255, 255, 0.09);
+
+  --primary:      #22d3ee;
+  --primary-soft: rgba(34, 211, 238, 0.13);
+  --success:      #34d399;
+  --success-soft: rgba(16, 185, 129, 0.14);
+  --warning:      #fbbf24;
+  --warning-soft: rgba(245, 158, 11, 0.14);
+  --error:        #f87171;
+  --error-soft:   rgba(239, 68, 68, 0.14);
+  --violet:       #a78bfa;
+  --violet-soft:  rgba(139, 92, 246, 0.14);
+
+  --radius: 16px;
+  --radius-sm: 10px;
+  --s1: 8px;  --s2: 16px;  --s3: 24px;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #edf1f7;
+  --glow-1: rgba(6, 182, 212, 0.20);
+  --glow-2: rgba(139, 92, 246, 0.14);
+  --glow-3: rgba(16, 185, 129, 0.12);
+
+  --text:   #101828;
+  --text-2: #43536b;
+  --text-3: #5d6d87;
+
+  --glass:          rgba(255, 255, 255, 0.58);
+  --glass-2:        rgba(255, 255, 255, 0.82);
+  --glass-border:   rgba(16, 24, 40, 0.09);
+  --glass-border-2: rgba(16, 24, 40, 0.16);
+  --shadow:    0 8px 28px rgba(16, 24, 40, 0.10);
+  --shadow-sm: 0 2px 8px rgba(16, 24, 40, 0.07);
+  --track: rgba(16, 24, 40, 0.09);
+
+  --primary:      #0891b2;
+  --primary-soft: rgba(8, 145, 178, 0.11);
+  --success:      #047857;
+  --success-soft: rgba(5, 150, 105, 0.12);
+  --warning:      #b45309;
+  --warning-soft: rgba(217, 119, 6, 0.13);
+  --error:        #dc2626;
+  --error-soft:   rgba(220, 38, 38, 0.10);
+  --violet:       #6d28d9;
+  --violet-soft:  rgba(124, 58, 237, 0.11);
+}
+
+/* ================================================================
+   Base
+   ================================================================ */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scrollbar-gutter: stable; }
+
+body {
+  min-height: 100vh;
+  color: var(--text);
+  font: 14px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background:
+    radial-gradient(900px 600px at 12% -5%,  var(--glow-1), transparent 62%),
+    radial-gradient(1100px 700px at 92% 18%, var(--glow-2), transparent 60%),
+    radial-gradient(900px 700px at 45% 110%, var(--glow-3), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+.wrap { max-width: 1240px; margin: 0 auto; padding: 0 var(--s3) var(--s3); }
+
+h2 {
+  font-size: 13px; font-weight: 600; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--text-2);
+  display: flex; align-items: center; gap: 10px;
+  margin: var(--s3) 0 var(--s2);
+}
+h2 .count-chip {
+  font-size: 12px; letter-spacing: 0; padding: 1px 9px; border-radius: 999px;
+  background: var(--warning-soft); color: var(--warning);
+  border: 1px solid var(--glass-border);
+  font-variant-numeric: tabular-nums;
+}
+h2 .count-chip[hidden] { display: none; }
+
+button {
+  font: inherit; color: inherit; cursor: pointer;
+  background: none; border: none;
+}
+button:disabled { cursor: default; opacity: 0.55; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+/* frosted-glass card — the core surface of the whole page */
+.glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  backdrop-filter: blur(14px) saturate(150%);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+/* subtle themed scrollbars (both engines) */
+* { scrollbar-width: thin; scrollbar-color: var(--track) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--track); border-radius: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ================================================================
+   Top Bar
+   ================================================================ */
+header {
+  position: sticky; top: 0; z-index: 40;
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+  background: var(--glass);
+  border-bottom: 1px solid var(--glass-border);
+}
+.topbar {
+  max-width: 1240px; margin: 0 auto;
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 12px var(--s3);
+}
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand .mark { width: 34px; height: 34px; flex: none; }
+.brand h1 { font-size: 19px; letter-spacing: 0.18em; font-weight: 700; }
+.brand .tagline { display: block; font-size: 11px; color: var(--text-3); letter-spacing: 0.04em; }
+.topbar .spacer { flex: 1; }
+
+#clock { text-align: right; line-height: 1.25; }
+#clock .time { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+#clock .date { font-size: 11px; color: var(--text-3); }
+
+#theme-toggle {
+  width: 40px; height: 40px; border-radius: 12px;
+  display: grid; place-items: center;
+  background: var(--glass-2); border: 1px solid var(--glass-border);
+  color: var(--text-2); transition: transform 0.15s ease, color 0.15s ease;
+}
+#theme-toggle:hover { color: var(--primary); transform: translateY(-1px); }
+#theme-toggle:active { transform: scale(0.92); }
+#theme-toggle svg { width: 18px; height: 18px; }
+
+/* ================================================================
+   Metrics Row — four stat tiles, then quota meters + heartbeat
+   ================================================================ */
+.metrics {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: var(--s2); margin-top: var(--s3);
+}
+.tile {
+  padding: var(--s2); position: relative; overflow: hidden;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.tile:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+.tile .top { display: flex; align-items: center; justify-content: space-between; }
+.tile .label {
+  font-size: 11px; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+.tile .icon-chip {
+  width: 30px; height: 30px; border-radius: 9px;
+  display: grid; place-items: center; flex: none;
+}
+.tile .icon-chip svg { width: 16px; height: 16px; }
+.tile .value {
+  font-size: 30px; font-weight: 700; margin-top: 6px;
+  font-variant-numeric: tabular-nums; line-height: 1.1;
+}
+.chip-warning { background: var(--warning-soft); color: var(--warning); }
+.chip-primary { background: var(--primary-soft); color: var(--primary); }
+.chip-success { background: var(--success-soft); color: var(--success); }
+.chip-error   { background: var(--error-soft);   color: var(--error); }
+
+/* change flash: a soft sweep across the tile when a number moves */
+@keyframes tile-flash {
+  0%   { box-shadow: inset 0 0 0 200px var(--primary-soft); }
+  100% { box-shadow: inset 0 0 0 200px transparent; }
+}
+.flash { animation: tile-flash 0.8s ease-out; }
+
+.quota-row {
+  display: grid; grid-template-columns: 1fr 1fr auto;
+  gap: var(--s2); margin-top: var(--s2); align-items: stretch;
+}
+.quota { padding: 14px var(--s2); }
+.quota .head { display: flex; justify-content: space-between; align-items: baseline; }
+.quota .name { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.08em; }
+.quota .pct  { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.quota .val  { font-size: 18px; font-weight: 600; margin: 4px 0 8px; font-variant-numeric: tabular-nums; }
+.quota .val .sub { font-size: 12px; font-weight: 400; color: var(--text-3); margin-left: 6px; }
+.meter { height: 6px; border-radius: 4px; background: var(--track); overflow: hidden; }
+/* meter fills are vivid fixed colors in both themes — the --success/--warning
+   tokens are ink colors tuned for text contrast, too muddy as bar fills */
+.meter > div {
+  height: 100%; width: 0; border-radius: 4px;
+  background: #10b981;
+  transition: width 0.5s cubic-bezier(0.25, 1, 0.4, 1), background-color 0.5s ease;
+}
+.meter > div.warn { background: #f59e0b; }
+.meter > div.low  { background: #fb923c; }
+
+/* loop heartbeat pill */
+.hb {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 18px; border-radius: 999px; min-height: 56px;
+  font-size: 13px; color: var(--text-2); white-space: nowrap;
+}
+.hb .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-3); flex: none; }
+.hb.online .dot { background: var(--success); animation: hb-pulse 2s ease-out infinite; }
+.hb.online { color: var(--text); }
+.hb.error .dot { background: var(--error); }
+@keyframes hb-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--success-soft), 0 0 0 0 rgba(52, 211, 153, 0.45); }
+  70%  { box-shadow: 0 0 0 9px transparent, 0 0 0 4px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* ================================================================
+   Main columns — approvals (left) / all tasks (right)
+   ================================================================ */
+.columns {
+  display: grid; grid-template-columns: 5fr 7fr;
+  gap: var(--s3); align-items: start;
+}
+/* without this the table's min-content width would widen the shared grid
+   track past the viewport on small screens */
+.columns > section { min-width: 0; }
+
+/* ---- Awaiting Your Decision cards ---- */
+#approvals { display: grid; gap: var(--s2); }
+
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes card-out {
+  to { opacity: 0; transform: translateX(24px) scale(0.97); }
+}
+.approval-card { padding: var(--s2); animation: card-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1); }
+.approval-card.leaving { animation: card-out 0.3s ease-in forwards; pointer-events: none; }
+
+/* pulse ring when a task has waited > 5 minutes */
+@keyframes waiting-pulse {
+  0%, 100% { border-color: var(--glass-border); box-shadow: var(--shadow-sm); }
+  50% { border-color: var(--warning); box-shadow: 0 0 18px 0 var(--warning-soft), var(--shadow-sm); }
+}
+.approval-card.waiting-long { animation: waiting-pulse 2.4s ease-in-out infinite; }
+
+.ac-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ac-time { margin-left: auto; font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.ac-goal {
+  margin: 10px 0 8px; font-size: 15px; line-height: 1.45; cursor: copy;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.ac-note { font-size: 12px; color: var(--primary); margin-bottom: 8px; }
+.ac-note[hidden] { display: none; }
+.ac-actions { display: flex; gap: 10px; margin-top: 6px; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 44px; padding: 0 18px; flex: 1;
+  border-radius: 12px; font-weight: 600; font-size: 14px;
+  border: 1px solid var(--glass-border-2);
+  background: var(--glass-2);
+  transition: transform 0.12s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+.btn svg { width: 16px; height: 16px; flex: none; }
+.btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+.btn:active:not(:disabled) { transform: scale(0.96); }
+.btn-approve { background: var(--success-soft); border-color: var(--success); color: var(--success); }
+.btn-reject  { background: var(--error-soft);   border-color: var(--error);   color: var(--error); }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  width: 14px; height: 14px; border-radius: 50%; flex: none;
+  border: 2px solid currentColor; border-top-color: transparent;
+  animation: spin 0.7s linear infinite;
+}
+
+/* ---- badges & chips (shared) ---- */
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 500; padding: 2px 10px;
+  border-radius: 999px; white-space: nowrap;
+  background: var(--glass-2); border: 1px solid var(--glass-border);
+  color: var(--text-2);
+}
+.badge .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.badge svg { width: 12px; height: 12px; }
+.badge-done     { background: var(--success-soft); color: var(--success); }
+.badge-failed   { background: var(--error-soft);   color: var(--error); }
+.badge-progress { background: var(--primary-soft); color: var(--primary); }
+.badge-approval { background: var(--warning-soft); color: var(--warning); }
+.badge-privacy  { background: var(--violet-soft);  color: var(--violet); }
+
+.id-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px; color: var(--text-3);
+  padding: 2px 8px; border-radius: 7px;
+  border: 1px solid transparent;
+  transition: color 0.15s ease, border-color 0.15s ease;
+  max-width: 100%;
+}
+.id-chip .id-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.id-chip svg { width: 12px; height: 12px; opacity: 0; flex: none; transition: opacity 0.15s ease; }
+.id-chip:hover { color: var(--primary); border-color: var(--glass-border-2); }
+.id-chip:hover svg { opacity: 1; }
+
+/* ---- All Tasks table ---- */
+.table-wrap {
+  overflow: auto; max-height: 560px;
+  scroll-behavior: smooth; -webkit-overflow-scrolling: touch;
+}
+/* fixed layout so all five columns always fit the card at desktop widths;
+   the min-width makes narrow screens scroll inside the card instead */
+table { width: 100%; border-collapse: collapse; font-size: 13px;
+        table-layout: fixed; min-width: 640px; }
+th:nth-child(1) { width: 17%; }  /* task id */
+th:nth-child(2) { width: 35%; }  /* goal */
+th:nth-child(3) { width: 19%; }  /* status */
+th:nth-child(4) { width: 15%; }  /* source */
+th:nth-child(5) { width: 14%; }  /* created */
+td { overflow: hidden; text-overflow: ellipsis; }
+th {
+  position: sticky; top: 0; z-index: 2; text-align: left;
+  font-size: 11px; color: var(--text-3); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.07em;
+  padding: 10px 14px;
+  background: var(--glass-2);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+}
+td { padding: 9px 14px; border-top: 1px solid var(--glass-border); vertical-align: middle; }
+tbody tr { transition: background-color 0.2s ease; }
+tbody tr:hover { background: var(--glass-2); }
+@keyframes row-flash {
+  0% { background-color: var(--primary-soft); }
+  100% { background-color: transparent; }
+}
+tbody tr.flash-row { animation: row-flash 1.2s ease-out; }
+td.goal-cell {
+  color: var(--text-2); max-width: 300px; cursor: copy;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+td .rel { color: var(--text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.src-cell { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); white-space: nowrap; }
+.src-cell svg { width: 13px; height: 13px; color: var(--violet); }
+
+/* ================================================================
+   Activity Feed
+   ================================================================ */
+#feed {
+  max-height: 520px; overflow-y: auto;
+  scroll-behavior: smooth; -webkit-overflow-scrolling: touch;
+  padding: 6px;
+}
+.ev { border-radius: var(--radius-sm); margin: 4px 2px; }
+.ev.fresh { animation: card-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1); }
+.ev-row {
+  display: flex; align-items: flex-start; gap: 12px;
+  width: 100%; padding: 10px 12px; text-align: left;
+  border-radius: var(--radius-sm); cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+.ev-row:hover { background: var(--glass-2); }
+.ev-icon {
+  width: 32px; height: 32px; border-radius: 10px; flex: none;
+  display: grid; place-items: center; margin-top: 1px;
+  background: var(--glass-2); border: 1px solid var(--glass-border);
+}
+.ev-icon svg { width: 16px; height: 16px; }
+.ev-main { flex: 1; min-width: 0; }
+.ev-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ev-type { font-weight: 600; font-size: 13px; }
+.actor-chip {
+  font-size: 11px; padding: 1px 8px; border-radius: 999px;
+  background: var(--glass-2); border: 1px solid var(--glass-border);
+  color: var(--text-2);
+}
+.ev-task { font-size: 11px; color: var(--text-3); font-family: ui-monospace, Menlo, Consolas, monospace; }
+.ev-reason {
+  font-size: 12px; color: var(--text-2); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.ev-time { text-align: right; line-height: 1.35; flex: none; }
+.ev-time .rel { display: block; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.ev-time .abs { display: block; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.ev-chev { color: var(--text-3); margin-top: 4px; flex: none; transition: transform 0.25s ease; }
+.ev-chev svg { width: 14px; height: 14px; }
+.ev.open .ev-chev { transform: rotate(180deg); }
+
+/* expandable detail — animated with the grid-rows trick */
+.ev-detail { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.28s ease; }
+.ev-detail > div { overflow: hidden; min-height: 0; }
+.ev.open .ev-detail { grid-template-rows: 1fr; }
+.ev-detail pre {
+  margin: 2px 12px 12px 56px; padding: 12px;
+  font-size: 12px; line-height: 1.5; overflow-x: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  background: var(--glass-2); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm); color: var(--text-2);
+  white-space: pre-wrap; word-break: break-word;
+}
+#feed-more { text-align: center; padding: 8px; font-size: 12px; color: var(--text-3); }
+#feed-more[hidden] { display: none; }
+
+/* icon tints by event family */
+.tint-violet  { color: var(--violet);  background: var(--violet-soft); }
+.tint-primary { color: var(--primary); background: var(--primary-soft); }
+.tint-success { color: var(--success); background: var(--success-soft); }
+.tint-warning { color: var(--warning); background: var(--warning-soft); }
+.tint-error   { color: var(--error);   background: var(--error-soft); }
+
+/* ================================================================
+   Modal (reject confirmation)
+   ================================================================ */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 100;
+  display: grid; place-items: center; padding: var(--s3);
+  background: rgba(4, 8, 15, 0.55);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  animation: fade-in 0.2s ease;
+}
+.modal-backdrop[hidden] { display: none; }
+@keyframes fade-in { from { opacity: 0; } }
+.modal {
+  background: var(--glass-2); max-width: 440px; width: 100%;
+  padding: var(--s3); box-shadow: var(--shadow);
+  animation: card-in 0.25s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.modal h3 { font-size: 17px; margin-bottom: 10px; }
+.modal .modal-goal {
+  font-size: 13px; color: var(--text-2); margin-bottom: 10px;
+  padding: 10px 12px; border-left: 3px solid var(--error);
+  background: var(--glass); border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.modal .modal-warn { font-size: 13px; color: var(--text-2); margin-bottom: var(--s2); }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.modal-actions .btn { flex: none; }
+
+/* ================================================================
+   Toasts
+   ================================================================ */
+#toasts {
+  position: fixed; right: var(--s2); bottom: var(--s2); z-index: 120;
+  display: flex; flex-direction: column; gap: 8px; max-width: 360px;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(30px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes toast-out { to { opacity: 0; transform: translateY(8px); } }
+.toast {
+  padding: 11px 14px; font-size: 13px;
+  background: var(--glass-2); border: 1px solid var(--glass-border);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  animation: toast-in 0.25s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.toast.hide { animation: toast-out 0.3s ease-in forwards; }
+.toast-ok   { border-left-color: var(--success); }
+.toast-warn { border-left-color: var(--warning); }
+.toast-err  { border-left-color: var(--error); }
+
+/* ================================================================
+   Empty states, footer, misc
+   ================================================================ */
+.empty {
+  padding: var(--s3); text-align: center; color: var(--text-3); font-size: 13px;
+  display: grid; justify-items: center; gap: 8px;
+}
+.empty svg { width: 26px; height: 26px; opacity: 0.6; }
+.empty[hidden] { display: none; }
+
+footer {
+  margin-top: var(--s3); padding: var(--s2) 0;
+  text-align: center; font-size: 12px; color: var(--text-3);
+}
+footer kbd {
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px;
+  padding: 1px 6px; border-radius: 5px;
+  border: 1px solid var(--glass-border-2); background: var(--glass-2);
+}
+
+/* card keyboard focus (j/k navigation) */
+.approval-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+
+/* ================================================================
+   Responsive — stack below 768px, keep 48px tap targets
+   ================================================================ */
+@media (max-width: 980px) {
+  .columns { grid-template-columns: 1fr; }
+}
+@media (max-width: 768px) {
+  .wrap { padding: 0 var(--s2) var(--s2); }
+  .topbar { padding: 10px var(--s2); }
+  .brand .tagline { display: none; }
+  .metrics { grid-template-columns: 1fr 1fr; }
+  .quota-row { grid-template-columns: 1fr; }
+  .hb { min-height: 48px; justify-content: center; }
+  .tile .value { font-size: 26px; }
+  .btn { min-height: 48px; }
+  .ev-time .abs { display: none; }
+  td.goal-cell { max-width: 140px; }
+  #toasts { left: var(--s2); max-width: none; }
+}
+
+/* ================================================================
+   Reduced motion — honor the OS setting
+   ================================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --page:  #0d0d0d;  --surface: #1a1a19;
-      --ink:   #ffffff;  --ink-2:   #c3c2b7;  --ink-3: #898781;
-      --line:  #2c2c2a;
-      --accent:#3987e5;
-    }
-  }
-  * { box-sizing: border-box; margin: 0; }
-  body {
-    background: var(--page); color: var(--ink);
-    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-    padding: 20px; max-width: 1080px; margin: 0 auto;
-  }
-  header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 18px; }
-  h1 { font-size: 20px; letter-spacing: .04em; }
-  h2 { font-size: 13px; color: var(--ink-2); text-transform: uppercase;
-       letter-spacing: .08em; margin: 22px 0 8px; }
-  .pill { font-size: 12px; padding: 3px 10px; border-radius: 999px;
-          border: 1px solid var(--line); color: var(--ink-2); background: var(--surface); }
-  .pill .dot { margin-right: 6px; }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-         vertical-align: baseline; }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-           gap: 10px; }
-  .tile { background: var(--surface); border: 1px solid var(--line);
-          border-radius: 8px; padding: 12px 14px; }
-  .tile .label { font-size: 11px; color: var(--ink-3); text-transform: uppercase;
-                 letter-spacing: .07em; }
-  .tile .value { font-size: 24px; font-weight: 600; margin-top: 2px;
-                 font-variant-numeric: tabular-nums; }
-  .tile .sub { font-size: 11px; color: var(--ink-2); }
-  .meter { height: 3px; background: var(--line); border-radius: 2px; margin-top: 8px; }
-  .meter > div { height: 100%; background: var(--accent); border-radius: 2px; }
-  .card { background: var(--surface); border: 1px solid var(--line);
-          border-radius: 8px; padding: 12px 14px; margin-bottom: 8px;
-          display: flex; gap: 12px; align-items: center; }
-  .card .goal { flex: 1; min-width: 0; }
-  .card .goal .id { font-size: 11px; color: var(--ink-3); font-family: ui-monospace, monospace; }
-  button { font: inherit; font-size: 13px; padding: 5px 14px; border-radius: 6px;
-           border: 1px solid var(--line); background: var(--surface);
-           color: var(--ink); cursor: pointer; }
-  button.approve { border-color: var(--good); }
-  button.reject  { border-color: var(--critical); }
-  button:hover { filter: brightness(0.95); }
-  table { width: 100%; border-collapse: collapse; background: var(--surface);
-          border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  th, td { text-align: left; padding: 7px 12px; border-top: 1px solid var(--line);
-           vertical-align: top; }
-  th { font-size: 11px; color: var(--ink-3); text-transform: uppercase;
-       letter-spacing: .07em; border-top: none; }
-  td.mono { font-family: ui-monospace, monospace; font-size: 12px; white-space: nowrap; }
-  td.goal { color: var(--ink-2); max-width: 420px; overflow: hidden;
-            text-overflow: ellipsis; white-space: nowrap; }
-  .badge { font-size: 12px; white-space: nowrap; }
-  .badge .dot { margin-right: 5px; }
-  #feed { background: var(--surface); border: 1px solid var(--line);
-          border-radius: 8px; max-height: 380px; overflow-y: auto;
-          font-family: ui-monospace, monospace; font-size: 12px; }
-  .ev { display: flex; gap: 10px; padding: 5px 12px; border-top: 1px solid var(--line); }
-  .ev:first-child { border-top: none; }
-  .ev .t { color: var(--ink-3); white-space: nowrap; }
-  .ev .who { color: var(--accent); white-space: nowrap; min-width: 70px; }
-  .ev .what { color: var(--ink); white-space: nowrap; }
-  .ev .why { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis;
-             white-space: nowrap; flex: 1; }
-  #toasts { position: fixed; right: 18px; bottom: 18px; display: flex;
-            flex-direction: column; gap: 8px; z-index: 10; }
-  .toast { background: var(--surface); border: 1px solid var(--line);
-           border-left: 3px solid var(--accent); border-radius: 6px;
-           padding: 10px 14px; box-shadow: 0 4px 14px rgba(0,0,0,.15);
-           max-width: 340px; font-size: 13px; }
-  .empty { color: var(--ink-3); padding: 10px 2px; font-size: 13px; }
+}
 </style>
 </head>
 <body>
-  <header>
-    <h1>NOVA</h1>
-    <span class="pill" id="loop-pill"><span class="dot" style="background:var(--ink-3)"></span>connecting…</span>
-  </header>
 
-  <div class="tiles" id="tiles"></div>
+<!-- ================================================================
+     Top Bar
+     ================================================================ -->
+<header>
+  <div class="topbar">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
+        <defs>
+          <linearGradient id="nova-g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#22d3ee"/>
+            <stop offset="1" stop-color="#a78bfa"/>
+          </linearGradient>
+        </defs>
+        <path fill="url(#nova-g)" d="M12 2l2.2 7.8L22 12l-7.8 2.2L12 22l-2.2-7.8L2 12l7.8-2.2z"/>
+      </svg>
+      <div>
+        <h1>NOVA</h1>
+        <span class="tagline">autonomous ops · local dashboard</span>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div id="clock" aria-hidden="true">
+      <div class="time">--:--:--</div>
+      <div class="date"></div>
+    </div>
+    <button id="theme-toggle" aria-label="Toggle light / dark theme" title="Toggle theme"></button>
+  </div>
+</header>
 
-  <h2>Awaiting your approval</h2>
-  <div id="approvals"><div class="empty">Nothing waiting.</div></div>
+<div class="wrap">
 
-  <h2>Tasks</h2>
-  <div id="tasks"></div>
+  <!-- ================================================================
+       Metrics Row
+       ================================================================ -->
+  <section class="metrics" aria-label="Task metrics">
+    <div class="glass tile">
+      <div class="top"><span class="label">Awaiting approval</span>
+        <span class="icon-chip chip-warning" id="i-needs"></span></div>
+      <div class="value" id="v-needs" data-v="0">0</div>
+    </div>
+    <div class="glass tile">
+      <div class="top"><span class="label">Running</span>
+        <span class="icon-chip chip-primary" id="i-running"></span></div>
+      <div class="value" id="v-running" data-v="0">0</div>
+    </div>
+    <div class="glass tile">
+      <div class="top"><span class="label">Done</span>
+        <span class="icon-chip chip-success" id="i-done"></span></div>
+      <div class="value" id="v-done" data-v="0">0</div>
+    </div>
+    <div class="glass tile">
+      <div class="top"><span class="label">Failed</span>
+        <span class="icon-chip chip-error" id="i-failed"></span></div>
+      <div class="value" id="v-failed" data-v="0">0</div>
+    </div>
+  </section>
 
-  <h2>Activity</h2>
-  <div id="feed"></div>
+  <section class="quota-row" aria-label="Quota and loop status">
+    <div class="glass quota" id="q-gemini">
+      <div class="head"><span class="name">Gemini quota · today</span><span class="pct"></span></div>
+      <div class="val">—</div>
+      <div class="meter"><div></div></div>
+    </div>
+    <div class="glass quota" id="q-groq">
+      <div class="head"><span class="name">Groq quota · today</span><span class="pct"></span></div>
+      <div class="val">—</div>
+      <div class="meter"><div></div></div>
+    </div>
+    <div class="glass hb" id="hb">
+      <span class="dot"></span><span id="hb-text">connecting…</span>
+    </div>
+  </section>
 
-  <div id="toasts"></div>
+  <!-- ================================================================
+       Main content — approvals + all tasks
+       ================================================================ -->
+  <div class="columns">
+
+    <!-- Awaiting Your Decision -->
+    <section aria-label="Tasks awaiting your decision">
+      <h2>Awaiting Your Decision <span class="count-chip" id="gate-count" hidden>0</span></h2>
+      <div id="approvals"></div>
+      <div class="glass empty" id="approvals-empty">
+        <span id="empty-check"></span>
+        All clear — nothing needs you right now.
+      </div>
+    </section>
+
+    <!-- All Tasks -->
+    <section aria-label="All tasks">
+      <h2>All Tasks</h2>
+      <div class="glass table-wrap">
+        <table>
+          <thead>
+            <tr><th>Task</th><th>Goal</th><th>Status</th><th>Source</th><th>Created</th></tr>
+          </thead>
+          <tbody id="task-rows"></tbody>
+        </table>
+        <div class="empty" id="tasks-empty">No tasks yet.</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ================================================================
+       Activity Feed
+       ================================================================ -->
+  <section aria-label="Activity feed">
+    <h2>Activity Feed</h2>
+    <div class="glass" style="padding: 4px;">
+      <div id="feed">
+        <div class="empty" id="feed-empty">No activity yet.</div>
+        <div id="feed-more" hidden>loading older entries…</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    NOVA · 127.0.0.1 only · <kbd>j</kbd>/<kbd>k</kbd> cycle approvals · click any ID or goal to copy
+  </footer>
+</div>
+
+<!-- ================================================================
+     Reject confirmation modal
+     ================================================================ -->
+<div class="modal-backdrop" id="modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <h3 id="modal-title">Reject this task?</h3>
+    <p class="modal-goal" id="modal-goal"></p>
+    <p class="modal-warn">Rejecting this will fail the task terminally. Sure?</p>
+    <div class="modal-actions">
+      <button class="btn" id="modal-cancel">Cancel</button>
+      <button class="btn btn-reject" id="modal-confirm">Reject task</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toasts -->
+<div id="toasts" aria-live="polite"></div>
 
 <script>
 "use strict";
-const $ = (id) => document.getElementById(id);
-const state = { lastLogId: 0, statuses: {}, first: true };
+/* ================================================================
+   SECURITY INVARIANT: every value that comes out of the API (goals,
+   reasons, task ids, log detail, …) is attacker-influenced text —
+   it only ever reaches the DOM via textContent / dataset / title,
+   NEVER innerHTML. innerHTML is used exclusively for the static
+   icon constants below.
+   ================================================================ */
 
-const STATUS = {  // color + label, never color alone
-  done:           ["var(--good)",     "done"],
-  needs_approval: ["var(--warning)",  "needs approval"],
-  failed:         ["var(--critical)", "failed"],
-  in_progress:    ["var(--accent)",   "in progress"],
-  pending:        ["var(--ink-3)",    "pending"],
+const $ = (id) => document.getElementById(id);
+
+/* ---------------- inline SVG icons (static constants only) ------ */
+const I = (paths) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ` +
+  `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+
+const ICONS = {
+  brain: I('<path d="M9.5 2A2.5 2.5 0 0 0 7 4.5v.55a3 3 0 0 0-2.5 2.95c0 .55.15 1.06.4 1.5A3 3 0 0 0 4 12a3 3 0 0 0 1.5 2.6A3 3 0 0 0 8 19h1a3 3 0 0 0 3-3V4.5A2.5 2.5 0 0 0 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 1 17 4.5v.55a3 3 0 0 1 2.5 2.95c0 .55-.15 1.06-.4 1.5A3 3 0 0 1 20 12a3 3 0 0 1-1.5 2.6A3 3 0 0 1 16 19h-1a3 3 0 0 1-3-3"/>'),
+  wrench: I('<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'),
+  thumbs: I('<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/>'),
+  bell: I('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'),
+  mail: I('<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/>'),
+  plus: I('<circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/>'),
+  shield: I('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'),
+  refresh: I('<path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/>'),
+  key: I('<path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/>'),
+  alert: I('<path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2z"/><path d="M12 9v4M12 17h.01"/>'),
+  activity: I('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>'),
+  lock: I('<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'),
+  copy: I('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
+  check: I('<path d="M20 6 9 17l-5-5"/>'),
+  x: I('<path d="M18 6 6 18M6 6l12 12"/>'),
+  sun: I('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>'),
+  moon: I('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'),
+  chevron: I('<path d="m6 9 6 6 6-6"/>'),
+  mic: I('<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3"/>'),
+  hand: I('<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v6M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>'),
 };
 
+/* event family → icon + tint (unknown types fall back gracefully) */
+const ACTION_META = {
+  llm_call:              ["brain",   "tint-violet"],
+  llm_transport_failure: ["alert",   "tint-error"],
+  app_launch:            ["wrench",  "tint-primary"],
+  approval_decision:     ["thumbs",  "tint-success"],
+  human_gate:            ["hand",    "tint-warning"],
+  notification:          ["bell",    "tint-warning"],
+  email_fetch:           ["mail",    "tint-primary"],
+  email_ingested:        ["mail",    "tint-primary"],
+  task_created:          ["plus",    "tint-success"],
+  status_change:         ["refresh", "tint-primary"],
+  secret_migrated:       ["key",     "tint-violet"],
+};
+
+const STATUS_META = {   /* label + badge class — color never alone */
+  done:           ["done",           "badge-done"],
+  failed:         ["failed",         "badge-failed"],
+  in_progress:    ["in progress",    "badge-progress"],
+  needs_approval: ["needs approval", "badge-approval"],
+  pending:        ["pending",        "badge"],
+};
+
+const SOURCE_ICON = { email: "mail", manual: "hand", voice: "mic" };
+
+/* ---------------- tiny DOM + format helpers --------------------- */
 function el(tag, cls, text) {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
-  if (text !== undefined) n.textContent = text;   // untrusted content stays text
+  if (text !== undefined) n.textContent = text;   // untrusted data stays text
   return n;
 }
-function badge(status) {
-  const [color, label] = STATUS[status] || ["var(--ink-3)", status];
-  const b = el("span", "badge");
-  const d = el("span", "dot"); d.style.background = color;
-  b.append(d, label);
+function icon(name) {
+  const s = el("span");
+  s.innerHTML = ICONS[name] || ICONS.activity;    // static constants only
+  return s.firstChild;
+}
+function fmtRel(iso) {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 10) return "just now";
+  if (s < 60) return `${Math.floor(s)}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+function fmtAbs(iso) {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso || "";
+  const d = new Date(t);
+  const today = new Date().toDateString() === d.toDateString();
+  const hms = d.toLocaleTimeString([], { hour12: false });
+  return today ? hms
+               : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${hms}`;
+}
+async function getJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url} → ${r.status}`);
+  return r.json();
+}
+async function copyText(text, what) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = el("textarea"); ta.value = text;
+    ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.append(ta); ta.select();
+    try { document.execCommand("copy"); } finally { ta.remove(); }
+  }
+  toast(`Copied${what ? " " + what : ""}!`, "ok");
+}
+function toast(msg, kind = "info") {
+  const t = el("div", `toast toast-${kind}`, msg);
+  $("toasts").append(t);
+  setTimeout(() => {
+    t.classList.add("hide");
+    t.addEventListener("animationend", () => t.remove(), { once: true });
+    setTimeout(() => t.remove(), 600);            // reduced-motion fallback
+  }, 4200);
+}
+function idChip(taskId) {
+  const b = el("button", "id-chip");
+  b.title = "Copy task id";
+  b.append(el("span", "id-text mono", taskId), icon("copy"));
+  b.onclick = (e) => { e.stopPropagation(); copyText(taskId, "task id"); };
   return b;
 }
-function toast(text) {
-  const t = el("div", "toast", text);
-  $("toasts").append(t);
-  setTimeout(() => t.remove(), 8000);
+function statusBadge(status) {
+  const [label, cls] = STATUS_META[status] || [status, "badge"];
+  const b = el("span", `badge ${cls}`);
+  b.append(el("span", "dot"), document.createTextNode(label));
+  return b;
 }
-async function getJSON(url) { const r = await fetch(url); return r.json(); }
-
-function renderTiles(overview) {
-  const hb = overview.heartbeat, counts = overview.task_counts || {};
-  const tiles = $("tiles"); tiles.replaceChildren();
-  const stat = (label, value, sub) => {
-    const t = el("div", "tile");
-    t.append(el("div", "label", label), el("div", "value", String(value)));
-    if (sub) t.append(el("div", "sub", sub));
-    tiles.append(t); return t;
+function sourceBadge(t) {
+  const b = el("span", "badge");
+  b.append(icon(SOURCE_ICON[t.source] || "activity"), document.createTextNode(t.source || "?"));
+  return b;
+}
+function privacyBadge() {
+  const b = el("span", "badge badge-privacy");
+  b.title = "Privacy-sensitive: routed to the local executor only";
+  b.append(icon("lock"), document.createTextNode("local-only"));
+  return b;
+}
+/* animated number roll-up for the metric tiles */
+function tweenNumber(node, to, ms = 500) {
+  const from = Number(node.dataset.v || 0);
+  if (from === to) return false;
+  node.dataset.v = String(to);
+  cancelAnimationFrame(node._raf);
+  const t0 = performance.now();
+  const step = (now) => {
+    const p = Math.min(1, (now - t0) / ms);
+    const eased = 1 - Math.pow(1 - p, 3);
+    node.textContent = String(Math.round(from + (to - from) * eased));
+    if (p < 1) node._raf = requestAnimationFrame(step);
   };
-  stat("Awaiting approval", counts.needs_approval || 0);
-  stat("Running", (counts.in_progress || 0) + (counts.pending || 0));
-  stat("Done", counts.done || 0);
-  stat("Failed", counts.failed || 0);
-  for (const [name, used, limit] of [
-      ["Gemini today", hb?.gemini_used, hb?.gemini_limit],
-      ["Groq today", hb?.groq_used, hb?.groq_limit]]) {
-    const t = stat(name, limit ? `${used} / ${limit}` : "off",
-                   limit ? "" : "no key — local only");
-    if (limit) {
-      const m = el("div", "meter"), fill = el("div");
-      fill.style.width = Math.min(100, 100 * used / limit) + "%";
-      m.append(fill); t.append(m);
+  node._raf = requestAnimationFrame(step);
+  return true;
+}
+function flash(node, cls = "flash") {
+  node.classList.remove(cls);
+  void node.offsetWidth;                          // restart the animation
+  node.classList.add(cls);
+}
+
+/* ---------------- state ----------------------------------------- */
+const state = {
+  lastLogId: 0,
+  oldestLogId: null,
+  noMoreOlder: false,
+  loadingOlder: false,
+  statuses: new Map(),      // task_id → last seen status (for change toasts)
+  first: true,
+  busy: false,
+  kbIndex: -1,              // j/k cursor over approval cards
+  connected: null,
+};
+const approvalCards = new Map();  // task_id → card element
+const taskRows = new Map();       // task_id → <tr>
+
+/* ---------------- theme toggle ---------------------------------- */
+const themeBtn = $("theme-toggle");
+function paintThemeButton() {
+  const dark = document.documentElement.dataset.theme !== "light";
+  themeBtn.replaceChildren(icon(dark ? "sun" : "moon"));
+  themeBtn.title = dark ? "Switch to light mode" : "Switch to dark mode";
+}
+themeBtn.onclick = () => {
+  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("nova-theme", next); } catch { /* private mode */ }
+  paintThemeButton();
+};
+/* follow OS preference while the user hasn't chosen manually */
+window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", (e) => {
+  let stored = null;
+  try { stored = localStorage.getItem("nova-theme"); } catch { /* ignore */ }
+  if (stored !== "light" && stored !== "dark") {
+    document.documentElement.dataset.theme = e.matches ? "light" : "dark";
+    paintThemeButton();
+  }
+});
+paintThemeButton();
+
+/* ---------------- clock ----------------------------------------- */
+function tickClock() {
+  const d = new Date();
+  $("clock").querySelector(".time").textContent =
+    d.toLocaleTimeString([], { hour12: false });
+  $("clock").querySelector(".date").textContent =
+    d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+}
+tickClock();
+setInterval(tickClock, 1000);
+
+/* static icon slots declared in the markup */
+$("i-needs").append(icon("shield"));
+$("i-running").append(icon("activity"));
+$("i-done").append(icon("check"));
+$("i-failed").append(icon("x"));
+$("empty-check").append(icon("check"));
+
+/* ================================================================
+   Metrics Row — counts, quota meters, heartbeat pill
+   ================================================================ */
+function renderOverview(overview) {
+  const counts = overview.task_counts || {};
+  const hb = overview.heartbeat;
+
+  const tiles = [
+    ["v-needs", counts.needs_approval || 0],
+    ["v-running", (counts.in_progress || 0) + (counts.pending || 0)],
+    ["v-done", counts.done || 0],
+    ["v-failed", counts.failed || 0],
+  ];
+  for (const [id, value] of tiles) {
+    const node = $(id);
+    if (tweenNumber(node, value) && !state.first) flash(node.closest(".tile"));
+  }
+
+  renderQuota($("q-gemini"), hb ? hb.gemini_used : null, hb ? hb.gemini_limit : null);
+  renderQuota($("q-groq"),   hb ? hb.groq_used : null,   hb ? hb.groq_limit : null);
+  renderHeartbeat(hb);
+}
+
+function renderQuota(card, used, limit) {
+  const val = card.querySelector(".val");
+  const pct = card.querySelector(".pct");
+  const bar = card.querySelector(".meter > div");
+  if (!limit) {                                    // 0 or null → no key configured
+    val.textContent = "off";
+    val.append(el("span", "sub", "no key — local only"));
+    pct.textContent = "";
+    bar.style.width = "0%";
+    return;
+  }
+  const p = Math.min(100, (100 * used) / limit);
+  val.textContent = `${used} / ${limit}`;
+  pct.textContent = `${Math.round(p)}%`;
+  bar.style.width = p + "%";                       // CSS transition tweens the fill
+  bar.className = p < 50 ? "" : p < 80 ? "warn" : "low";
+}
+
+function renderHeartbeat(hb) {
+  const pill = $("hb"), text = $("hb-text");
+  pill.classList.remove("online", "error");
+  if (!hb) { text.textContent = "offline — loop has never run"; return; }
+  const age = (Date.now() - Date.parse(hb.updated_at)) / 1000;
+  const alive = age < Math.max(3 * (hb.interval_seconds || 60), 10);
+  if (alive) {
+    pill.classList.add("online");
+    text.textContent = `online · tick #${hb.tick}`;
+  } else {
+    text.textContent = `offline · last seen ${fmtRel(hb.updated_at)}`;
+  }
+}
+
+function renderUnreachable() {
+  const pill = $("hb"), text = $("hb-text");
+  pill.classList.remove("online");
+  pill.classList.add("error");
+  text.textContent = "dashboard server unreachable";
+}
+
+/* ================================================================
+   Awaiting Your Decision — keyed cards, animated in/out
+   ================================================================ */
+const WAIT_PULSE_MS = 5 * 60 * 1000;
+
+function buildApprovalCard(t) {
+  const card = el("article", "glass approval-card");
+  card.tabIndex = 0;
+  card.dataset.taskId = t.task_id;
+
+  const head = el("div", "ac-head");
+  head.append(sourceBadge(t));
+  if (t.privacy_sensitive) head.append(privacyBadge());
+  const time = el("span", "ac-time");
+  time.dataset.ts = t.created_at || "";
+  head.append(time);
+  card.append(head);
+
+  const goal = el("p", "ac-goal", t.goal);
+  goal.title = t.goal + "  (click to copy)";
+  goal.onclick = () => copyText(t.goal, "goal");
+  card.append(goal, idChip(t.task_id));
+
+  const note = el("div", "ac-note");
+  note.hidden = true;
+  card.append(note);
+
+  const actions = el("div", "ac-actions");
+  const yes = el("button", "btn btn-approve");
+  yes.append(icon("check"), document.createTextNode("Approve"));
+  yes.onclick = () => decide(t, true, card);
+  const no = el("button", "btn btn-reject");
+  no.append(icon("x"), document.createTextNode("Reject"));
+  no.onclick = () => decide(t, false, card);
+  actions.append(yes, no);
+  card.append(actions);
+  return card;
+}
+
+function updateApprovalCard(card, t) {
+  const time = card.querySelector(".ac-time");
+  time.textContent = "waiting " + fmtRel(t.created_at).replace(" ago", "");
+  const waited = Date.now() - Date.parse(t.created_at);
+  card.classList.toggle("waiting-long", waited > WAIT_PULSE_MS);
+
+  const note = card.querySelector(".ac-note");
+  const decided = t.pending_decision !== null && t.pending_decision !== undefined;
+  note.hidden = !decided;
+  if (decided) {
+    note.textContent = `Decision recorded (${t.pending_decision ? "approve" : "reject"}) — ` +
+                       `the loop applies it on its next tick.`;
+  }
+  for (const b of card.querySelectorAll(".ac-actions .btn")) b.disabled = decided;
+}
+
+function renderApprovals(tasks) {
+  const gate = tasks.filter((t) => t.status === "needs_approval");
+  const wrap = $("approvals");
+  const seen = new Set();
+
+  for (const t of gate) {
+    seen.add(t.task_id);
+    let card = approvalCards.get(t.task_id);
+    if (!card) {
+      card = buildApprovalCard(t);
+      approvalCards.set(t.task_id, card);
+      wrap.append(card);
+    }
+    updateApprovalCard(card, t);
+  }
+  for (const [id, card] of approvalCards) {
+    if (!seen.has(id)) {
+      approvalCards.delete(id);
+      card.classList.add("leaving");
+      card.addEventListener("animationend", () => card.remove(), { once: true });
+      setTimeout(() => card.remove(), 600);       // reduced-motion fallback
     }
   }
-  const pill = $("loop-pill"); pill.replaceChildren();
-  const dot = el("span", "dot");
-  if (hb) {
-    const age = (Date.now() - Date.parse(hb.updated_at)) / 1000;
-    const alive = age < Math.max(3 * hb.interval_seconds, 10);
-    dot.style.background = alive ? "var(--good)" : "var(--critical)";
-    pill.append(dot, alive ? `loop alive — tick ${hb.tick}`
-                           : `loop offline — last seen ${Math.round(age)}s ago`);
-  } else {
-    dot.style.background = "var(--ink-3)";
-    pill.append(dot, "loop has never run");
-  }
+
+  $("approvals-empty").hidden = gate.length > 0;
+  const chip = $("gate-count");
+  chip.hidden = gate.length === 0;
+  chip.textContent = String(gate.length);
+  document.title = gate.length ? `(${gate.length}) NOVA · dashboard` : "NOVA · dashboard";
 }
 
-async function decide(taskId, approved) {
-  if (!approved && !confirm(`Reject ${taskId}? The task will fail terminally.`)) return;
-  const r = await fetch("/api/decision", {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({task_id: taskId, approved}),
+/* ---- decision flow ---------------------------------------------- */
+let modalResolve = null;
+function confirmReject(t) {
+  return new Promise((resolve) => {
+    modalResolve = resolve;
+    $("modal-goal").textContent = t.goal;
+    $("modal").hidden = false;
+    $("modal-cancel").focus();
   });
-  const out = await r.json();
-  toast(r.ok ? `${approved ? "Approval" : "Rejection"} recorded for ${taskId} — ` +
-               `the loop applies it on its next tick.` : `Error: ${out.error}`);
-  poll();
+}
+function closeModal(answer) {
+  if ($("modal").hidden) return;
+  $("modal").hidden = true;
+  if (modalResolve) { modalResolve(answer); modalResolve = null; }
+}
+$("modal-cancel").onclick = () => closeModal(false);
+$("modal-confirm").onclick = () => closeModal(true);
+$("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closeModal(false); });
+
+async function decide(t, approved, card) {
+  if (!approved && !(await confirmReject(t))) return;
+
+  const buttons = [...card.querySelectorAll(".ac-actions .btn")];
+  const target = buttons[approved ? 0 : 1];
+  const original = target.innerHTML;              // static markup built above
+  buttons.forEach((b) => (b.disabled = true));
+  target.replaceChildren(el("span", "spinner"), document.createTextNode(" Deciding…"));
+
+  try {
+    const r = await fetch("/api/decision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task_id: t.task_id, approved }),
+    });
+    const out = await r.json().catch(() => ({}));
+    if (r.ok) {
+      toast(`${approved ? "Approved" : "Rejected"} ${t.task_id} — the loop applies it ` +
+            `on its next tick.`, approved ? "ok" : "warn");
+    } else {
+      toast(`Error: ${out.error || r.status}`, "err");
+    }
+  } catch {
+    toast("Network error — decision was not recorded.", "err");
+  }
+  target.innerHTML = original;                    // restore the static label
+  buttons.forEach((b) => (b.disabled = false));
+  poll();                                          // reflect pending_decision now
+}
+
+/* ================================================================
+   All Tasks — keyed table rows, reordered in place
+   ================================================================ */
+function buildTaskRow(t) {
+  const tr = document.createElement("tr");
+  tr.dataset.taskId = t.task_id;
+
+  const tdId = el("td");
+  tdId.append(idChip(t.task_id));
+
+  const tdGoal = el("td", "goal-cell");
+  tdGoal.onclick = () => copyText(tr._goal, "goal");
+
+  const tdStatus = el("td");
+  const tdSource = el("td");
+  const tdCreated = el("td");
+  tdCreated.append(el("span", "rel"));
+
+  tr.append(tdId, tdGoal, tdStatus, tdSource, tdCreated);
+  return tr;
+}
+
+function updateTaskRow(tr, t) {
+  tr._goal = t.goal;
+  const [, tdGoal, tdStatus, tdSource, tdCreated] = tr.children;
+
+  if (tdGoal.textContent !== t.goal) {
+    tdGoal.textContent = t.goal;
+    tdGoal.title = t.goal;                        // hover tooltip: full goal
+  }
+  if (tr.dataset.status !== t.status) {
+    tdStatus.replaceChildren(statusBadge(t.status));
+    if (tr.dataset.status) flash(tr, "flash-row");
+    tr.dataset.status = t.status;
+  }
+  const srcKey = `${t.source}|${t.privacy_sensitive ? 1 : 0}`;
+  if (tr.dataset.src !== srcKey) {
+    tr.dataset.src = srcKey;
+    const wrap = el("span", "src-cell", t.source || "?");
+    if (t.privacy_sensitive) {
+      const lock = icon("lock");
+      wrap.append(lock);
+      wrap.title = "Privacy-sensitive — local executor only";
+    }
+    tdSource.replaceChildren(wrap);
+  }
+  const rel = tdCreated.querySelector(".rel");
+  rel.textContent = fmtRel(t.created_at);
+  rel.title = fmtAbs(t.created_at);
 }
 
 function renderTasks(tasks) {
-  const gate = tasks.filter(t => t.status === "needs_approval");
-  const wrap = $("approvals"); wrap.replaceChildren();
-  if (!gate.length) wrap.append(el("div", "empty", "Nothing waiting."));
-  for (const t of gate) {
-    const card = el("div", "card");
-    const g = el("div", "goal");
-    g.append(el("div", "id", t.task_id), el("div", "", t.goal));
-    if (t.pending_decision !== null) {
-      g.append(el("div", "id",
-        `decision recorded (${t.pending_decision ? "approve" : "reject"}) — waiting for the loop`));
+  const tbody = $("task-rows");
+  const seen = new Set();
+
+  for (const t of tasks) {                        // API is already newest-first
+    seen.add(t.task_id);
+    let tr = taskRows.get(t.task_id);
+    if (!tr) {
+      tr = buildTaskRow(t);
+      taskRows.set(t.task_id, tr);
     }
-    const yes = el("button", "approve", "Approve");
-    yes.onclick = () => decide(t.task_id, true);
-    const no = el("button", "reject", "Reject");
-    no.onclick = () => decide(t.task_id, false);
-    card.append(g, yes, no);
-    wrap.append(card);
-  }
+    updateTaskRow(tr, t);
+    tbody.append(tr);                             // appending reorders in place
 
-  const table = el("table");
-  const head = el("tr");
-  for (const h of ["Task", "Status", "Source", "Goal", "Updated"]) head.append(el("th", "", h));
-  table.append(head);
-  for (const t of tasks) {
-    const tr = el("tr");
-    tr.append(el("td", "mono", t.task_id));
-    const td = el("td"); td.append(badge(t.status)); tr.append(td);
-    tr.append(el("td", "", t.source + (t.privacy_sensitive ? " (local-only)" : "")));
-    const goal = el("td", "goal", t.goal); goal.title = t.goal; tr.append(goal);
-    tr.append(el("td", "mono", (t.updated_at || "").replace("T", " ").slice(0, 19)));
-    table.append(tr);
-
-    const prev = state.statuses[t.task_id];
+    const prev = state.statuses.get(t.task_id);
     if (!state.first && prev && prev !== t.status) {
-      if (t.status === "needs_approval") toast(`⚠ ${t.task_id} needs your approval`);
-      if (t.status === "done") toast(`✓ ${t.task_id} finished`);
-      if (t.status === "failed") toast(`✗ ${t.task_id} failed`);
+      if (t.status === "needs_approval") toast(`${t.task_id} needs your approval`, "warn");
+      else if (t.status === "done") toast(`${t.task_id} finished ✓`, "ok");
+      else if (t.status === "failed") toast(`${t.task_id} failed`, "err");
     }
-    state.statuses[t.task_id] = t.status;
+    state.statuses.set(t.task_id, t.status);
   }
-  $("tasks").replaceChildren(tasks.length ? table : el("div", "empty", "No tasks yet."));
+  for (const [id, tr] of taskRows) {
+    if (!seen.has(id)) { taskRows.delete(id); tr.remove(); }
+  }
+  $("tasks-empty").hidden = tasks.length > 0;
 }
 
-function renderLog(entries) {
-  const feed = $("feed");
-  for (const e of entries) {
-    const row = el("div", "ev");
-    row.append(
-      el("span", "t", (e.timestamp || "").slice(11, 19)),
-      el("span", "who", e.actor),
-      el("span", "what", e.action_type),
-      el("span", "why", e.reason || ""));
-    row.title = e.detail || "";
-    feed.prepend(row);                       // newest on top
+/* ================================================================
+   Activity Feed — newest first, expandable detail, lazy history
+   ================================================================ */
+const feed = $("feed");
+const FEED_CAP = 400;
+
+function prettyDetail(raw) {
+  if (raw === null || raw === undefined || raw === "") return "";
+  try { return JSON.stringify(JSON.parse(raw), null, 2); }
+  catch { return String(raw); }
+}
+
+function buildLogEntry(e) {
+  const [iconName, tint] = ACTION_META[e.action_type] || ["activity", "tint-primary"];
+  const art = el("article", "ev");
+  art.dataset.id = String(e.id);
+
+  const row = el("div", "ev-row");
+  row.setAttribute("role", "button");
+  row.setAttribute("aria-expanded", "false");
+  row.tabIndex = 0;
+
+  const chip = el("span", `ev-icon ${tint}`);
+  chip.append(icon(iconName));
+
+  const main = el("div", "ev-main");
+  const top = el("div", "ev-top");
+  top.append(el("span", "ev-type", e.action_type),
+             el("span", "actor-chip", e.actor || "?"));
+  if (e.task_id) top.append(el("span", "ev-task", e.task_id));
+  main.append(top);
+  if (e.reason) main.append(el("div", "ev-reason", e.reason));
+
+  const time = el("div", "ev-time");
+  const rel = el("span", "rel", fmtRel(e.timestamp));
+  rel.dataset.ts = e.timestamp || "";
+  time.append(rel, el("span", "abs", fmtAbs(e.timestamp)));
+
+  const chev = el("span", "ev-chev");
+  chev.append(icon("chevron"));
+  row.append(chip, main, time, chev);
+
+  const detail = el("div", "ev-detail");
+  const inner = el("div");
+  const pre = el("pre", "", prettyDetail(e.detail) || "(no detail)");
+  inner.append(pre);
+  detail.append(inner);
+
+  const toggle = () => {
+    const open = art.classList.toggle("open");
+    row.setAttribute("aria-expanded", String(open));
+  };
+  row.onclick = toggle;
+  row.onkeydown = (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(); }
+  };
+
+  art.append(row, detail);
+  return art;
+}
+
+function renderLog(entries) {                     // incremental batch, ASC order
+  if (!entries.length) return;
+  $("feed-empty").hidden = true;
+
+  const stick = feed.scrollTop < 40;              // only auto-scroll if near top
+  for (const e of entries) {                      // prepending ASC → newest on top
+    const art = buildLogEntry(e);
+    if (!state.first) art.classList.add("fresh");
+    feed.prepend(art);
     state.lastLogId = Math.max(state.lastLogId, e.id);
+    if (state.oldestLogId === null) state.oldestLogId = e.id;
   }
-  while (feed.childElementCount > 200) feed.lastElementChild.remove();
+  if (stick) feed.scrollTop = 0;
+
+  let evs = feed.querySelectorAll(".ev");
+  if (evs.length > FEED_CAP) {                    // trim history; allow re-fetch
+    for (let i = FEED_CAP; i < evs.length; i++) evs[i].remove();
+    evs = feed.querySelectorAll(".ev");
+    state.oldestLogId = Number(evs[evs.length - 1].dataset.id);
+    state.noMoreOlder = false;
+  }
+  feed.append($("feed-more"));                    // keep the sentinel at the bottom
 }
 
+async function loadOlder() {
+  if (state.loadingOlder || state.noMoreOlder || state.oldestLogId === null) return;
+  state.loadingOlder = true;
+  $("feed-more").hidden = false;
+  try {
+    const want = feed.querySelectorAll(".ev").length + 50;
+    const all = await getJSON(`/api/log?limit=${want}`);
+    const older = all.filter((e) => e.id < state.oldestLogId);
+    if (!older.length) { state.noMoreOlder = true; return; }
+    for (let i = older.length - 1; i >= 0; i--) {  // append below, newest-of-older first
+      feed.append(buildLogEntry(older[i]));
+    }
+    state.oldestLogId = older[0].id;
+  } catch { /* transient — retried on next scroll */ }
+  finally {
+    state.loadingOlder = false;
+    $("feed-more").hidden = true;
+    feed.append($("feed-more"));
+  }
+}
+feed.addEventListener("scroll", () => {
+  if (feed.scrollTop + feed.clientHeight > feed.scrollHeight - 120) loadOlder();
+});
+
+/* refresh every visible relative timestamp (feed + table + cards) */
+function refreshRelativeTimes() {
+  for (const n of document.querySelectorAll(".rel[data-ts]")) {
+    if (n.dataset.ts) n.textContent = fmtRel(n.dataset.ts);
+  }
+}
+
+/* ================================================================
+   Keyboard — j/k cycles through approval cards (HN style)
+   ================================================================ */
+document.addEventListener("keydown", (e) => {
+  if (!$("modal").hidden) {
+    if (e.key === "Escape") closeModal(false);
+    return;
+  }
+  if (e.target.closest("input, textarea, select")) return;
+  if (e.key !== "j" && e.key !== "k") return;
+  const cards = [...$("approvals").querySelectorAll(".approval-card:not(.leaving)")];
+  if (!cards.length) return;
+  state.kbIndex = (state.kbIndex + (e.key === "j" ? 1 : -1) + cards.length) % cards.length;
+  const card = cards[state.kbIndex];
+  card.focus({ preventScroll: true });
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+});
+
+/* ================================================================
+   Polling loop — merge into the DOM, never rebuild it
+   ================================================================ */
 async function poll() {
+  if (state.busy) return;
+  state.busy = true;
   try {
     const [overview, tasks, log] = await Promise.all([
       getJSON("/api/overview"),
       getJSON("/api/tasks?limit=50"),
       getJSON(`/api/log?after_id=${state.lastLogId}&limit=100`),
     ]);
-    renderTiles(overview);
+    renderOverview(overview);
+    renderApprovals(tasks);
     renderTasks(tasks);
     renderLog(log);
+    refreshRelativeTimes();
+    if (state.connected === false) toast("Reconnected to the dashboard server.", "ok");
+    state.connected = true;
     state.first = false;
-  } catch (err) {
-    const pill = $("loop-pill"); pill.replaceChildren();
-    const dot = el("span", "dot"); dot.style.background = "var(--critical)";
-    pill.append(dot, "dashboard server unreachable");
+  } catch {
+    if (state.connected !== false) renderUnreachable();
+    state.connected = false;
+  } finally {
+    state.busy = false;
   }
 }
 poll();
-setInterval(poll, 2000);
+setInterval(poll, 1500);
 </script>
 </body>
 </html>
