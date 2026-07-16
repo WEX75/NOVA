@@ -68,3 +68,28 @@ def test_tasks_table_remains_updatable(temp_backlog):
     temp_backlog.add_task(TaskRecord(task_id="t-q", goal="g"))
     temp_backlog.update_status("t-q", "in_progress")
     assert temp_backlog.get_task("t-q").status == "in_progress"
+
+
+def test_pre_final_output_db_is_migrated_on_open(tmp_path):
+    """A DB created before the final_output column existed (the live nova.db)
+    must gain it transparently — CREATE TABLE IF NOT EXISTS alone would not."""
+    import sqlite3
+
+    from backlog import Backlog, TaskRecord
+    db = tmp_path / "old.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE tasks (task_id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
+                     "source TEXT NOT NULL DEFAULT 'manual', "
+                     "privacy_sensitive INTEGER NOT NULL DEFAULT 0, "
+                     "status TEXT NOT NULL DEFAULT 'pending', "
+                     "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+
+    bl = Backlog(db)
+    try:
+        bl.add_task(TaskRecord(task_id="t-old", goal="g"))
+        bl.update_status("t-old", "done", final_output="migrated fine")
+        row = bl._conn.execute(
+            "SELECT final_output FROM tasks WHERE task_id='t-old'").fetchone()
+        assert row["final_output"] == "migrated fine"
+    finally:
+        bl.close()

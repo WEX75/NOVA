@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     privacy_sensitive INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'pending',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    final_output TEXT
 );
 CREATE TABLE IF NOT EXISTS runtime_status (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -106,6 +107,11 @@ class Backlog:
         self._conn = sqlite3.connect(str(db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        # Migration for DBs created before final_output existed — CREATE TABLE
+        # IF NOT EXISTS never adds columns to an existing table.
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(tasks)")}
+        if "final_output" not in cols:
+            self._conn.execute("ALTER TABLE tasks ADD COLUMN final_output TEXT")
         self._conn.commit()
         # After the schema exists: from here on this connection cannot even
         # prepare an UPDATE/DELETE against the episodic log.
@@ -116,7 +122,8 @@ class Backlog:
     def add_task(self, task: TaskRecord) -> None:
         now = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
-            "INSERT INTO tasks VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO tasks (task_id, goal, source, privacy_sensitive, "
+            "status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
             (task.task_id, task.goal, task.source, int(task.privacy_sensitive),
              task.status, now, now),
         )
@@ -125,11 +132,21 @@ class Backlog:
                                action_type="task_created",
                                detail=task.model_dump(), reason=f"new task from {task.source}"))
 
-    def update_status(self, task_id: str, status: str) -> None:
-        self._conn.execute(
-            "UPDATE tasks SET status=?, updated_at=? WHERE task_id=?",
-            (status, datetime.now(timezone.utc).isoformat(), task_id),
-        )
+    def update_status(self, task_id: str, status: str,
+                      final_output: Optional[str] = None) -> None:
+        """final_output, when given (terminal states), is persisted with the
+        status so read-only consumers (the dashboard chat history) can show a
+        task's result without opening the graph checkpoint. For failed tasks
+        the callers store the last error here — it is 'NOVA's reply' either way."""
+        now = datetime.now(timezone.utc).isoformat()
+        if final_output is None:
+            self._conn.execute(
+                "UPDATE tasks SET status=?, updated_at=? WHERE task_id=?",
+                (status, now, task_id))
+        else:
+            self._conn.execute(
+                "UPDATE tasks SET status=?, updated_at=?, final_output=? WHERE task_id=?",
+                (status, now, final_output, task_id))
         self._conn.commit()
         self.log(EpisodicEntry(task_id=task_id, actor="system",
                                action_type="status_change", detail={"status": status},

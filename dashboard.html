@@ -467,6 +467,70 @@ td .rel { color: var(--text-3); white-space: nowrap; font-variant-numeric: tabul
 .tint-error   { color: var(--error);   background: var(--error-soft); }
 
 /* ================================================================
+   Chat — conversation bubbles over the real task pipeline
+   ================================================================ */
+.chat { display: flex; flex-direction: column; overflow: hidden; }
+#chat-log {
+  max-height: 440px; overflow-y: auto;
+  padding: var(--s2); display: grid; gap: 4px; align-content: start;
+  scroll-behavior: smooth; -webkit-overflow-scrolling: touch;
+}
+.chat-turn { display: grid; gap: 10px; padding: 6px 0; }
+.chat-turn.fresh { animation: card-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1); }
+.msg {
+  max-width: 76%; padding: 10px 14px; font-size: 14px; line-height: 1.5;
+  border-radius: var(--radius-sm); border: 1px solid var(--glass-border);
+  white-space: pre-wrap; word-break: break-word;
+}
+.msg-user {
+  justify-self: end; text-align: left;
+  background: var(--primary-soft); border-color: var(--glass-border-2);
+  border-bottom-right-radius: 4px;
+}
+.msg-nova {
+  justify-self: start; background: var(--glass-2);
+  border-bottom-left-radius: 4px;
+}
+.msg-nova.msg-failed { border-left: 3px solid var(--error); }
+.msg-fail-label {
+  font-size: 11px; font-weight: 600; color: var(--error);
+  text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px;
+}
+.msg-meta { font-size: 11px; color: var(--text-3); margin-top: 6px; }
+.msg-gate-note { font-size: 12px; color: var(--primary); margin-top: 6px; }
+.chat-gate { display: flex; gap: 8px; margin-top: 10px; }
+.chat-gate .btn { min-height: 38px; flex: none; padding: 0 14px; font-size: 13px; }
+/* "NOVA is thinking…" indicator */
+.msg-thinking { display: inline-flex; align-items: center; gap: 8px; color: var(--text-2); }
+.dots { display: inline-flex; gap: 4px; }
+.dots span {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--text-3);
+  animation: dot-bounce 1.2s ease-in-out infinite;
+}
+.dots span:nth-child(2) { animation-delay: 0.15s; }
+.dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes dot-bounce {
+  0%, 60%, 100% { transform: none; opacity: 0.5; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+#chat-form {
+  display: flex; gap: 10px; padding: 12px;
+  border-top: 1px solid var(--glass-border);
+}
+#chat-input {
+  flex: 1; min-width: 0; min-height: 48px; padding: 0 14px;
+  font: inherit; color: var(--text);
+  background: var(--glass-2); border: 1px solid var(--glass-border-2);
+  border-radius: 12px; transition: border-color 0.15s ease;
+}
+#chat-input::placeholder { color: var(--text-3); }
+#chat-input:focus { outline: none; border-color: var(--primary); }
+.btn-send {
+  flex: none; min-width: 84px;
+  background: var(--primary-soft); border-color: var(--primary); color: var(--primary);
+}
+
+/* ================================================================
    Modal (reject confirmation)
    ================================================================ */
 .modal-backdrop {
@@ -560,6 +624,9 @@ footer kbd {
   .ev-time .abs { display: none; }
   td.goal-cell { max-width: 140px; }
   #toasts { left: var(--s2); max-width: none; }
+  .msg { max-width: 92%; }
+  #chat-log { max-height: 380px; }
+  .btn-send { min-width: 64px; }
 }
 
 /* ================================================================
@@ -594,7 +661,7 @@ footer kbd {
       </svg>
       <div>
         <h1>NOVA</h1>
-        <span class="tagline">autonomous ops · local dashboard</span>
+        <span class="tagline">Network Operations &amp; Virtual Assistant · local dashboard</span>
       </div>
     </div>
     <div class="spacer"></div>
@@ -647,6 +714,28 @@ footer kbd {
     </div>
     <div class="glass hb" id="hb">
       <span class="dot"></span><span id="hb-text">connecting…</span>
+    </div>
+  </section>
+
+  <!-- ================================================================
+       Chat — a conversational view over the real task pipeline (§13):
+       every message becomes a manual task; the reply is that task's
+       actual result. No separate LLM conversation exists.
+       ================================================================ -->
+  <section aria-label="Chat with NOVA">
+    <h2>Chat</h2>
+    <div class="glass chat">
+      <div id="chat-log">
+        <div class="msg msg-nova" id="chat-welcome">Welcome to NOVA — Network Operations &amp; Virtual Assistant. What can I help with?</div>
+      </div>
+      <form id="chat-form">
+        <input id="chat-input" type="text" autocomplete="off" maxlength="4000"
+               placeholder="Ask NOVA to do something — every message becomes a real, audited task…"
+               aria-label="Message to NOVA">
+        <button class="btn btn-send" id="chat-send" type="submit">
+          <span id="chat-send-label">Send</span>
+        </button>
+      </form>
     </div>
   </section>
 
@@ -1107,6 +1196,27 @@ $("modal-cancel").onclick = () => closeModal(false);
 $("modal-confirm").onclick = () => closeModal(true);
 $("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closeModal(false); });
 
+/* one decision path for the approval cards AND the chat gate controls —
+   both write through the same /api/decision endpoint */
+async function postDecision(taskId, approved) {
+  try {
+    const r = await fetch("/api/decision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task_id: taskId, approved }),
+    });
+    const out = await r.json().catch(() => ({}));
+    if (r.ok) {
+      toast(`${approved ? "Approved" : "Rejected"} ${taskId} — the loop applies it ` +
+            `on its next tick.`, approved ? "ok" : "warn");
+    } else {
+      toast(`Error: ${out.error || r.status}`, "err");
+    }
+  } catch {
+    toast("Network error — decision was not recorded.", "err");
+  }
+}
+
 async function decide(t, approved, card) {
   if (!approved && !(await confirmReject(t))) return;
 
@@ -1116,22 +1226,8 @@ async function decide(t, approved, card) {
   buttons.forEach((b) => (b.disabled = true));
   target.replaceChildren(el("span", "spinner"), document.createTextNode(" Deciding…"));
 
-  try {
-    const r = await fetch("/api/decision", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task_id: t.task_id, approved }),
-    });
-    const out = await r.json().catch(() => ({}));
-    if (r.ok) {
-      toast(`${approved ? "Approved" : "Rejected"} ${t.task_id} — the loop applies it ` +
-            `on its next tick.`, approved ? "ok" : "warn");
-    } else {
-      toast(`Error: ${out.error || r.status}`, "err");
-    }
-  } catch {
-    toast("Network error — decision was not recorded.", "err");
-  }
+  await postDecision(t.task_id, approved);
+
   target.innerHTML = original;                    // restore the static label
   buttons.forEach((b) => (b.disabled = false));
   poll();                                          // reflect pending_decision now
@@ -1215,6 +1311,153 @@ function renderTasks(tasks) {
   }
   $("tasks-empty").hidden = tasks.length > 0;
 }
+
+/* ================================================================
+   Chat — the transcript IS the manual-task history (§13): goal =
+   the owner's bubble, final_output = NOVA's reply. Persisted across
+   sessions by construction; nothing is stored client-side.
+   ================================================================ */
+const chatLog = $("chat-log");
+const chatTurns = new Map();      // task_id → .chat-turn element
+
+function chatReply(t) {
+  if (t.status === "done") {
+    const m = el("div", "msg msg-nova", t.final_output || "Done.");
+    const meta = el("div", "msg-meta");
+    const rel = el("span", "rel", fmtRel(t.updated_at));
+    rel.dataset.ts = t.updated_at || "";
+    meta.append(document.createTextNode("done · "), rel);
+    m.append(meta);
+    return m;
+  }
+  if (t.status === "failed") {
+    const m = el("div", "msg msg-nova msg-failed");
+    m.append(el("div", "msg-fail-label", "task failed"),
+             el("div", "", t.final_output ||
+                "No further detail — check the activity feed."));
+    return m;
+  }
+  if (t.status === "needs_approval") {
+    const m = el("div", "msg msg-nova");
+    m.append(el("div", "", "This request needs your approval before it runs."));
+    const decided = t.pending_decision !== null && t.pending_decision !== undefined;
+    if (decided) {
+      m.append(el("div", "msg-gate-note",
+        `Decision recorded (${t.pending_decision ? "approve" : "reject"}) — ` +
+        `the loop applies it on its next tick.`));
+    } else {
+      const row = el("div", "chat-gate");
+      const yes = el("button", "btn btn-approve");
+      yes.append(icon("check"), document.createTextNode("Approve"));
+      yes.onclick = () => chatDecide(t, true, row);
+      const no = el("button", "btn btn-reject");
+      no.append(icon("x"), document.createTextNode("Reject"));
+      no.onclick = () => chatDecide(t, false, row);
+      row.append(yes, no);
+      m.append(row);
+    }
+    return m;
+  }
+  // pending / in_progress → the task is queued or running right now
+  const m = el("div", "msg msg-nova msg-thinking");
+  m.append(document.createTextNode("NOVA is thinking"));
+  const dots = el("span", "dots");
+  dots.append(el("span"), el("span"), el("span"));
+  m.append(dots);
+  return m;
+}
+
+async function chatDecide(t, approved, row) {
+  if (!approved && !(await confirmReject(t))) return;
+  for (const b of row.querySelectorAll(".btn")) b.disabled = true;
+  await postDecision(t.task_id, approved);
+  poll();
+}
+
+function buildChatTurn(t) {
+  const turn = el("div", "chat-turn");
+  turn.dataset.taskId = t.task_id;
+  const user = el("div", "msg msg-user", t.goal);
+  user.title = `${t.task_id} · ${fmtAbs(t.created_at)}  (click to copy)`;
+  user.onclick = () => copyText(t.goal, "message");
+  user.style.cursor = "copy";
+  turn.append(user, el("div", "chat-reply"));
+  return turn;
+}
+
+function renderChat(history) {                    // API is oldest-first
+  const seen = new Set();
+  const stick = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 80;
+
+  for (const t of history) {
+    seen.add(t.task_id);
+    let turn = chatTurns.get(t.task_id);
+    if (!turn) {
+      turn = buildChatTurn(t);
+      chatTurns.set(t.task_id, turn);
+      if (!state.first) turn.classList.add("fresh");
+    }
+    delete turn.dataset.optimistic;               // confirmed by the server
+    const key = `${t.status}|${t.pending_decision ?? ""}|${t.final_output ?? ""}`;
+    if (turn.dataset.key !== key) {
+      turn.dataset.key = key;
+      turn.querySelector(".chat-reply").replaceChildren(chatReply(t));
+    }
+    chatLog.append(turn);                         // keeps chronological order
+  }
+  for (const [id, turn] of chatTurns) {
+    if (seen.has(id)) continue;
+    if (turn.dataset.optimistic) chatLog.append(turn);  // just sent, newest last
+    else { chatTurns.delete(id); turn.remove(); }       // slid out of the window
+  }
+
+  $("chat-welcome").hidden = chatTurns.size > 0;
+  if (stick && chatTurns.size) chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+/* send: the message becomes a real task; the reply arrives via polling */
+let chatSending = false;
+$("chat-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = $("chat-input");
+  const message = input.value.trim();
+  if (!message || chatSending) return;
+  chatSending = true;
+  const send = $("chat-send");
+  send.disabled = true;
+  $("chat-send-label").replaceChildren(el("span", "spinner"));
+
+  try {
+    const r = await fetch("/api/chat/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    const out = await r.json().catch(() => ({}));
+    if (r.ok && out.task_id) {
+      input.value = "";
+      // optimistic turn — replaced by the real row on the next poll
+      const turn = buildChatTurn({ task_id: out.task_id, goal: message,
+                                   created_at: new Date().toISOString() });
+      turn.dataset.optimistic = "1";
+      turn.dataset.key = "pending||";
+      turn.classList.add("fresh");
+      turn.querySelector(".chat-reply").replaceChildren(chatReply({ status: "pending" }));
+      chatTurns.set(out.task_id, turn);
+      chatLog.append(turn);
+      $("chat-welcome").hidden = true;
+      chatLog.scrollTop = chatLog.scrollHeight;
+    } else {
+      toast(`Error: ${out.error || r.status}`, "err");
+    }
+  } catch {
+    toast("Network error — message was not sent.", "err");
+  }
+  $("chat-send-label").textContent = "Send";
+  send.disabled = false;
+  chatSending = false;
+  input.focus();
+});
 
 /* ================================================================
    Activity Feed — newest first, expandable detail, lazy history
@@ -1357,15 +1600,17 @@ async function poll() {
   if (state.busy) return;
   state.busy = true;
   try {
-    const [overview, tasks, log] = await Promise.all([
+    const [overview, tasks, log, chat] = await Promise.all([
       getJSON("/api/overview"),
       getJSON("/api/tasks?limit=50"),
       getJSON(`/api/log?after_id=${state.lastLogId}&limit=100`),
+      getJSON("/api/chat/history?limit=200"),
     ]);
     renderOverview(overview);
     renderApprovals(tasks);
     renderTasks(tasks);
     renderLog(log);
+    renderChat(chat);
     refreshRelativeTimes();
     if (state.connected === false) toast("Reconnected to the dashboard server.", "ok");
     state.connected = true;

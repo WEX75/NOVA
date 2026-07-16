@@ -33,6 +33,8 @@ import time
 import uuid
 from pathlib import Path
 
+from pydantic import ValidationError
+
 import action_log
 import secrets_store
 from backlog import Backlog, TaskRecord
@@ -203,11 +205,12 @@ def drive_task(app, backlog: Backlog, task_id: str, quota: QuotaTracker,
 
     final = _snapshot_state(app, cfg)
     if final.status is TaskStatus.DONE:
-        backlog.update_status(task_id, "done")
+        backlog.update_status(task_id, "done", final_output=final.final_output)
         if headless:  # console users are already watching; alert the absent owner
             notify_result(task_id, "done", final.final_output or "")
     elif final.status is TaskStatus.FAILED:
-        backlog.update_status(task_id, "failed")
+        backlog.update_status(task_id, "failed",
+                              final_output=final.error_log[-1] if final.error_log else None)
         if headless:
             notify_result(task_id, "failed",
                           final.error_log[-1] if final.error_log else "")
@@ -243,6 +246,36 @@ def resume_incomplete(app, backlog: Backlog, quota: QuotaTracker,
         quota = _drive_guarded(app, backlog, task.task_id, quota,
                                stop=stop, headless=headless)
     return quota
+
+
+def start_new_pending(app, backlog: Backlog, quota: QuotaTracker,
+                      stop: threading.Event | None = None,
+                      headless: bool = False) -> tuple[QuotaTracker, int]:
+    """Drive tasks that arrived as bare `pending` rows from another process —
+    the dashboard chat submit writes one exactly like `nova run` would, just
+    into the DB instead of an in-process call. Generic over source: any fresh
+    pending task gets a NovaState built from its record and runs on this tick.
+    (Email tasks normally never appear here — the loop ingests and drives them
+    inline — but a stranded one would be picked up the same way.)"""
+    started = 0
+    for task in backlog.pending_tasks():
+        if stop is not None and stop.is_set():
+            break
+        try:
+            state = NovaState(task_id=task.task_id, goal=task.goal,
+                              source=task.source,
+                              privacy_sensitive=task.privacy_sensitive)
+        except ValidationError:
+            log.warning("pending task %s has an unusable record (source=%r) — "
+                        "marking failed", task.task_id, task.source)
+            backlog.update_status(task.task_id, "failed",
+                                  final_output=f"unusable task record: "
+                                               f"source={task.source!r}")
+            continue
+        started += 1
+        quota = _drive_guarded(app, backlog, task.task_id, quota,
+                               stop=stop, fresh_state=state, headless=headless)
+    return quota, started
 
 
 def apply_pending_decisions(app, backlog: Backlog, quota: QuotaTracker,
@@ -321,10 +354,13 @@ def loop(app, backlog: Backlog, quota: QuotaTracker, interval: float,
          max_ticks: int | None = None,
          headless: bool | None = None) -> QuotaTracker:
     """Persistent mode. Each tick: apply any recorded approval decisions
-    (§13), then poll the inbox, quarantine-ingest and run new mail one
-    message at a time — a task is only created immediately before it starts
-    running, so a shutdown can never strand an ingested-but-never-started
-    task (its mail simply comes back next poll, un-deduped). The tick log
+    (§13), drive tasks queued as pending rows by other processes (dashboard
+    chat — durable in the tasks table, so a shutdown just defers them to the
+    next start's first tick), then poll the inbox, quarantine-ingest and run
+    new mail one message at a time — a mail task is only created immediately
+    before it starts running, so a shutdown can never strand an
+    ingested-but-never-started task (its mail simply comes back next poll,
+    un-deduped). The tick log
     line is the liveness/ops signal: unread seen, tasks created, gates
     waiting, quota standing.
 
@@ -353,13 +389,17 @@ def loop(app, backlog: Backlog, quota: QuotaTracker, interval: float,
         while not stop.is_set() and (max_ticks is None or tick < max_ticks):
             tick += 1
             quota = apply_pending_decisions(app, backlog, quota, stop)
+            # Tasks queued by other processes (dashboard chat, a future CLI
+            # enqueue) arrive as pending rows; drive them before the slower
+            # mail poll so a chat message gets a prompt reply.
+            quota, new_tasks = start_new_pending(app, backlog, quota, stop,
+                                                 headless=headless)
             try:
                 messages = client.fetch_unread(limit=limit)
             except Exception as e:  # noqa: BLE001 — one bad poll must not kill the loop
                 log.error("tick %d: outlook fetch failed: %s", tick, e)
                 messages = []
 
-            new_tasks = 0
             for msg in messages:
                 if stop.is_set():
                     break
@@ -401,7 +441,11 @@ def poll(app, backlog: Backlog, quota: QuotaTracker, limit: int = 10) -> QuotaTr
 
 def run_manual_goal(app, backlog: Backlog, goal: str, quota: QuotaTracker) -> QuotaTracker:
     state = NovaState(task_id=f"task-{uuid.uuid4().hex[:12]}", goal=goal, source="manual")
-    backlog.add_task(TaskRecord(task_id=state.task_id, goal=goal, source="manual"))
+    # Born in_progress, not pending: this process drives the task itself, and
+    # a concurrently running loop must never see a pending row it would also
+    # drive (start_new_pending is for tasks queued BY other processes).
+    backlog.add_task(TaskRecord(task_id=state.task_id, goal=goal, source="manual",
+                                status="in_progress"))
     return run_task(app, backlog, state, quota)
 
 

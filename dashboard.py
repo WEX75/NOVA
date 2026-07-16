@@ -2,10 +2,12 @@
 NOVA — local dashboard (§13 companion).
 
 A read-mostly web UI over the same SQLite DB the loop uses: live activity
-feed (the episodic log), task states, loop heartbeat/quota, and
-approve/reject buttons that write through Backlog.record_decision — the
-same sanctioned §13 path as `nova approve`. It never talks to the running
-loop process and never calls a model.
+feed (the episodic log), task states, loop heartbeat/quota, approve/reject
+buttons that write through Backlog.record_decision — the same sanctioned
+§13 path as `nova approve` — and a chat panel whose messages become real
+manual tasks (POST /api/chat/submit, identical to `main.py run`) that the
+running loop drives on its next tick. It never talks to the running loop
+process and never calls a model.
 
 SECURITY MODEL: binds 127.0.0.1 ONLY (hard-coded, not configurable), but
 localhost binding alone is NOT a boundary against the owner's own browser:
@@ -26,11 +28,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from backlog import Backlog
+from backlog import Backlog, TaskRecord
 
 _PAGE = Path(__file__).parent / "dashboard.html"
 BIND_HOST = "127.0.0.1"  # never expose beyond the local machine
@@ -91,6 +94,9 @@ class _Handler(BaseHTTPRequestHandler):
             after_id = int(params.get("after_id", ["0"])[0])
             limit = int(params.get("limit", ["100"])[0])
             self._json(200, self._log(after_id, limit))
+        elif url.path == "/api/chat/history":
+            limit = int(params.get("limit", ["200"])[0])
+            self._json(200, self._chat_history(limit))
         else:
             self._json(404, {"error": "not found"})
 
@@ -124,7 +130,30 @@ class _Handler(BaseHTTPRequestHandler):
                     "ORDER BY id ASC", (limit,)).fetchall()
         return [dict(r) for r in rows]
 
+    def _chat_history(self, limit: int) -> list[dict]:
+        """The chat transcript is real task data: manual-source tasks
+        oldest-first (goal = the owner's message, final_output = NOVA's
+        reply). CLI `nova run` tasks are the same kind of input, so one
+        unified history. The subquery keeps the most RECENT rows when the
+        limit bites."""
+        with self._ro() as conn:
+            rows = conn.execute(
+                "SELECT * FROM ("
+                "  SELECT t.task_id, t.goal, t.status, t.created_at, t.updated_at, "
+                "         t.final_output, "
+                "         (SELECT approved FROM approval_decisions d "
+                "          WHERE d.task_id = t.task_id AND d.applied_at IS NULL) "
+                "         AS pending_decision "
+                "  FROM tasks t WHERE t.source = 'manual' "
+                "  ORDER BY t.created_at DESC, t.task_id DESC LIMIT ?"
+                ") ORDER BY created_at ASC, task_id ASC", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
     # --- POST ---
+    # Both write endpoints share the SAME hardening by construction: the Host
+    # check and the application/json requirement below run before any path
+    # dispatch. /api/chat/submit is a bigger attack surface than /api/decision
+    # (it creates arbitrary new tasks), so it must never get a weaker gate.
 
     def do_POST(self):  # noqa: N802
         if not self._host_ok():
@@ -137,12 +166,21 @@ class _Handler(BaseHTTPRequestHandler):
             # this server never approves.
             self._json(415, {"error": "Content-Type must be application/json"})
             return
-        if urlparse(self.path).path != "/api/decision":
+        path = urlparse(self.path).path
+        if path == "/api/decision":
+            self._post_decision()
+        elif path == "/api/chat/submit":
+            self._post_chat_submit()
+        else:
             self._json(404, {"error": "not found"})
-            return
+
+    def _read_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", "0"))
+        return json.loads(self.rfile.read(length) or b"{}")
+
+    def _post_decision(self) -> None:
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            data = json.loads(self.rfile.read(length) or b"{}")
+            data = self._read_body()
             task_id = str(data["task_id"])
             approved = bool(data["approved"])
         except (KeyError, ValueError, json.JSONDecodeError):
@@ -162,6 +200,30 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "task_id": task_id, "approved": approved})
         finally:
             backlog.close()
+
+    def _post_chat_submit(self) -> None:
+        """A chat message becomes a real manual task — the same defaults as
+        `main.py run "<goal>"` (source='manual', status='pending', not
+        privacy-sensitive). The running loop drives it on its next tick
+        (main.start_new_pending); this process never touches a model, so
+        there is no path from here to an LLM that isn't an audited task."""
+        try:
+            data = self._read_body()
+            message = str(data["message"]).strip()
+        except (KeyError, ValueError, json.JSONDecodeError):
+            self._json(400, {"error": "expected JSON {message}"})
+            return
+        if not message:
+            self._json(400, {"error": "message must not be empty"})
+            return
+        task_id = f"task-{uuid.uuid4().hex[:12]}"
+        backlog = Backlog(self.server.db_path)  # fresh rw connection per request
+        try:
+            backlog.add_task(TaskRecord(task_id=task_id, goal=message,
+                                        source="manual"))
+        finally:
+            backlog.close()
+        self._json(200, {"task_id": task_id})
 
 
 def build_server(db_path, port: int = 8765) -> ThreadingHTTPServer:

@@ -211,6 +211,51 @@ def test_loop_tick_logs_liveness_and_quota(temp_backlog, fake_llm, caplog):
         temp_backlog.tasks_with_status("done")[0].task_id).status == "done"
 
 
+def test_loop_drives_bare_pending_rows_regardless_of_source(temp_backlog, fake_llm,
+                                                            caplog):
+    """§13 chat prerequisite: a pending row written by ANOTHER process (the
+    dashboard's /api/chat/submit, exactly like these direct inserts) has no
+    checkpoint and no in-process driver — the tick must pick it up. Generic
+    over source, not hardcoded to the email-ingestion path."""
+    from backlog import Backlog, TaskRecord
+
+    other = Backlog(temp_backlog.db_path)          # a separate process's connection
+    other.add_task(TaskRecord(task_id="t-chat", goal="from the dashboard chat"))
+    other.add_task(TaskRecord(task_id="t-stranded", goal="a stranded email task",
+                              source="email", privacy_sensitive=True))
+    other.close()
+    fake_llm.reply = json.dumps({"tool_calls": [], "summary": "handled"})
+
+    class EmptyInbox:
+        def fetch_unread(self, limit=10):
+            return []
+    with caplog.at_level(logging.INFO, logger="nova"):
+        manager.loop(build_graph(), temp_backlog,
+                     QuotaTracker(gemini_daily_limit=0, groq_daily_limit=0),
+                     interval=0, client=EmptyInbox(), max_ticks=1, headless=True)
+
+    assert temp_backlog.get_task("t-chat").status == "done"
+    assert temp_backlog.get_task("t-stranded").status == "done"
+    assert "tick 1: 0 unread fetched, 2 new task(s)" in caplog.text
+
+
+def test_done_task_persists_final_output_for_the_chat_history(temp_backlog, fake_llm,
+                                                              monkeypatch):
+    """NOVA's chat 'reply' is read from the tasks table — drive_task must
+    persist final_output at the terminal state, not leave it checkpoint-only."""
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+    fake_llm.reply = json.dumps({"tool_calls": [], "summary": "the digest"})
+
+    manager.run_manual_goal(build_graph(), temp_backlog,
+                            "write the digest", QuotaTracker(gemini_daily_limit=0,
+                                                             groq_daily_limit=0))
+
+    row = temp_backlog._conn.execute(
+        "SELECT status, final_output FROM tasks").fetchone()
+    assert row["status"] == "done"
+    assert row["final_output"] == "the digest"
+
+
 def test_loop_survives_an_unconstructable_outlook_client(temp_backlog, caplog,
                                                          monkeypatch):
     """No NOVA_MS_CLIENT_ID in the keyring must not crash-loop the service —
