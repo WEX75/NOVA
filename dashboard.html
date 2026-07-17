@@ -513,6 +513,11 @@ td .rel { color: var(--text-3); white-space: nowrap; font-variant-numeric: tabul
   0%, 60%, 100% { transform: none; opacity: 0.5; }
   30% { transform: translateY(-4px); opacity: 1; }
 }
+/* crimson abort control riding the thinking indicator */
+.btn-abort {
+  min-height: 34px; padding: 0 12px; font-size: 12px;
+  flex: none; margin-left: 6px;
+}
 #chat-form {
   display: flex; gap: 10px; padding: 12px;
   border-top: 1px solid var(--glass-border);
@@ -1364,7 +1369,42 @@ function chatReply(t) {
   const dots = el("span", "dots");
   dots.append(el("span"), el("span"), el("span"));
   m.append(dots);
+  if (t.task_id) {                                // optimistic turns wait for a real id
+    const abortBtn = el("button", "btn btn-reject btn-abort");
+    abortBtn.title = "Abort this task — cancels the in-flight generation";
+    abortBtn.append(icon("x"), document.createTextNode("Abort"));
+    abortBtn.onclick = () => chatAbort(t, abortBtn);
+    m.append(abortBtn);
+  }
   return m;
+}
+
+/* abort: POST, then show "Stopping…" honestly until the poll confirms the
+   real status change — the button never fakes an instant transition */
+async function chatAbort(t, btn) {
+  btn.disabled = true;
+  btn.replaceChildren(el("span", "spinner"), document.createTextNode(" Stopping…"));
+  try {
+    const r = await fetch("/api/task/abort", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task_id: t.task_id }),
+    });
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      toast(`Abort failed: ${out.error || r.status}`, "err");
+      btn.disabled = false;
+      btn.replaceChildren(icon("x"), document.createTextNode("Abort"));
+      return;
+    }
+    toast(`Aborting ${t.task_id} — the in-flight generation is being cancelled.`, "warn");
+  } catch {
+    toast("Network error — abort was not delivered.", "err");
+    btn.disabled = false;
+    btn.replaceChildren(icon("x"), document.createTextNode("Abort"));
+    return;
+  }
+  poll();
 }
 
 async function chatDecide(t, approved, row) {

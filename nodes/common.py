@@ -98,6 +98,28 @@ def transport_failure_update(state: NovaState, agent: AgentRole, exc: Exception,
             "current_agent": agent}
 
 
+ABORT_REASON = "Aborted by user via dashboard"
+
+
+def aborted_update(state: NovaState, agent: AgentRole, input_summary: str,
+                   force_local: bool = False) -> dict:
+    """Owner-initiated cancellation (§14): TERMINAL by design. The owner
+    already decided this task should stop — retrying would countermand
+    them, so this deliberately does not ride failure_update's
+    retry_count -> human_gate path the way transport failures do."""
+    from llm import resolve_model
+
+    model, provider = resolve_model(agent, force_local)
+    step = AgentStep(agent=agent, provider=provider, model_name=model,
+                     input_summary=input_summary,
+                     output_summary="ABORTED: owner cancelled mid-flight")
+    log_action(state.task_id, actor=agent.value, action_type="task_aborted",
+               detail={"model": model, "provider": provider.value, "in_flight": True},
+               reason="owner abort signal cancelled the in-flight call")
+    return {"history": [step], "error_log": [ABORT_REASON],
+            "status": TaskStatus.FAILED, "current_agent": agent}
+
+
 def advance_update(state: NovaState, step: AgentStep, final_output: str | None = None) -> dict:
     """Move to the next subtask; finish the task when none remain."""
     next_index = state.current_subtask_index + 1

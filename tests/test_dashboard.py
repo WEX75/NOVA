@@ -41,7 +41,7 @@ def test_root_serves_the_page(dash):
     assert "NOVA" in page
     # every API endpoint the backend serves is actually used by the page
     for endpoint in ("api/overview", "api/tasks", "api/log", "/api/decision",
-                     "/api/chat/submit", "/api/chat/history"):
+                     "/api/chat/submit", "/api/chat/history", "/api/task/abort"):
         assert endpoint in page, endpoint
     # headline UI features
     assert "nova-theme" in page                  # dark/light choice persisted
@@ -309,3 +309,53 @@ def test_heartbeat_roundtrip_and_upsert(temp_backlog):
     temp_backlog.write_heartbeat(2, 300.0, 5, 250, 1, 1000)
     hb = temp_backlog.read_heartbeat()
     assert hb["tick"] == 2 and hb["gemini_used"] == 5   # single row, upserted
+
+
+# --- POST /api/task/abort (§14) -------------------------------------------------
+# Same hardening as /api/decision BY CONSTRUCTION (host + media-type checks run
+# in do_POST before path dispatch) — these tests prove the mirror holds, plus
+# the decision-endpoint validation pattern (404 unknown / 409 terminal).
+
+def test_abort_mirrors_decision_csrf_and_host_hardening(dash, temp_backlog):
+    temp_backlog.add_task(TaskRecord(task_id="t-abt", goal="g",
+                                     status="in_progress"))
+    body = json.dumps({"task_id": "t-abt"})
+
+    for ctype in ("text/plain", "application/x-www-form-urlencoded"):
+        r = requests.post(f"{dash}/api/task/abort", data=body,
+                          headers={"Content-Type": ctype})
+        assert r.status_code == 415, ctype
+
+    r = requests.post(f"{dash}/api/task/abort", json={"task_id": "t-abt"},
+                      headers={"Host": "evil.example"})
+    assert r.status_code == 403
+
+    # none of the rejected requests changed anything
+    assert temp_backlog.get_task("t-abt").status == "in_progress"
+    assert temp_backlog.abort_requested("t-abt") is False
+
+
+def test_abort_refuses_unknown_and_terminal_tasks(dash, temp_backlog):
+    assert requests.post(f"{dash}/api/task/abort",
+                         json={"task_id": "t-ghost"}).status_code == 404
+    temp_backlog.add_task(TaskRecord(task_id="t-fin", goal="g", status="done"))
+    assert requests.post(f"{dash}/api/task/abort",
+                         json={"task_id": "t-fin"}).status_code == 409
+    assert temp_backlog.abort_requested("t-fin") is False
+
+    r = requests.post(f"{dash}/api/task/abort", json={"wrong_key": 1})
+    assert r.status_code == 400
+
+
+def test_abort_sets_the_flag_fails_the_task_and_audit_logs(dash, temp_backlog):
+    temp_backlog.add_task(TaskRecord(task_id="t-run", goal="long analysis",
+                                     status="in_progress"))
+
+    r = requests.post(f"{dash}/api/task/abort", json={"task_id": "t-run"})
+
+    assert r.status_code == 200 and r.json()["ok"] is True
+    task = temp_backlog.get_task("t-run")
+    assert task.status == "failed"
+    assert temp_backlog.abort_requested("t-run") is True   # the loop's signal
+    assert any(e["action_type"] == "task_aborted"          # audit-logged (§4)
+               for e in temp_backlog.log_entries(task_id="t-run"))

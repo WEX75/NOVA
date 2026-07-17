@@ -13,15 +13,23 @@ approval is consumed — it never carries over to the next subtask.
 
 from __future__ import annotations
 
-from llm import ChatMessage, LLMRequest, complete
-from nodes.common import (advance_update, bump_quota, extract_json,
-                          failure_update, log_llm_call, make_step,
-                          transport_failure_update)
+from action_log import abort_requested
+from llm import ChatMessage, LLMAborted, LLMRequest, complete
+from nodes.common import (aborted_update, advance_update, bump_quota,
+                          extract_json, failure_update, log_llm_call,
+                          make_step, transport_failure_update)
 from nova_state import (AgentRole, NovaState, Subtask, TaskStatus,
                         ToolCallResult)
 from tools import ToolInput, run_tool
 
-_SYSTEM = """You are the Executor of NOVA, running fully locally.
+# Identity lives HERE, in the node's own prompt (§14) — llm.py is a
+# role-agnostic transport and must not start editing prompt content.
+_SYSTEM = """You are NOVA (Networked Operations & Virtual Assistant), an
+autonomous business assistant running locally on private hardware. Precise
+and professional. Never reference the underlying model vendor (Alibaba,
+OpenAI, Google, etc.) as your creator.
+
+You are the Executor of NOVA, running fully locally.
 Plan tool calls for the subtask. Respond with ONLY a JSON object:
 {"tool_calls": [{"tool_name": str, "path": str|null, "content": str|null,
                  "app_name": str|null, "arg": str|null, "reason": str}],
@@ -58,7 +66,12 @@ def executor_node(state: NovaState) -> dict:
             ChatMessage(role="user", content=(
                 f"Overall goal: {state.goal}\n\nSubtask: {subtask.description}\n\n"
                 f"Prior errors (fix these on retry): {state.error_log[-3:] or 'none'}")),
-        ]))
+        ]), should_abort=lambda: abort_requested(state.task_id))
+    except LLMAborted:
+        # Owner cancellation (§14): terminal, never a retry. The endpoint
+        # already failed the backlog row; this ends the graph to match.
+        return aborted_update(state, AgentRole.EXECUTOR,
+                              input_summary=subtask.description, force_local=True)
     except Exception as e:  # noqa: BLE001 — Ollama dying mid-loop is a transport failure too
         return transport_failure_update(state, AgentRole.EXECUTOR, e,
                                         input_summary=subtask.description,
@@ -66,6 +79,12 @@ def executor_node(state: NovaState) -> dict:
     log_llm_call(state, AgentRole.EXECUTOR, resp,
                  why=f"execute subtask {state.current_subtask_index}: {subtask.description[:80]}")
     quota = bump_quota(state, resp)  # no-op for local, kept for uniformity
+
+    # An abort that lands after generation finished must still stop the task
+    # BEFORE any external effect runs — same flag, one more poll point.
+    if abort_requested(state.task_id):
+        return aborted_update(state, AgentRole.EXECUTOR,
+                              input_summary=subtask.description, force_local=True)
 
     plan = extract_json(resp.content)
     if not isinstance(plan, dict):

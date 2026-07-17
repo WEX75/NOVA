@@ -48,10 +48,40 @@ class _Response:
         self.usage = _Usage()
 
 
+class _Delta:
+    def __init__(self, content):
+        self.content = content
+
+
+class _StreamChoice:
+    def __init__(self, content):
+        self.delta = _Delta(content)
+
+
+class _Chunk:
+    def __init__(self, content):
+        self.choices = [_StreamChoice(content)]
+        self.usage = _Usage()
+
+
+class _Stream:
+    """Iterable single-chunk stream for llm.complete()'s cancellable path."""
+    completion_stream = None
+
+    def __init__(self, content):
+        self._chunks = [_Chunk(content)]
+
+    def __iter__(self):
+        return iter(self._chunks)
+
+
 def _fake_completion(**kwargs):
     print("LLM_CALL", flush=True)
     time.sleep(float(os.environ.get("HARNESS_LLM_DELAY", "0")))
-    return _Response(os.environ["HARNESS_REPLY"])
+    reply = os.environ["HARNESS_REPLY"]
+    if kwargs.get("stream"):
+        return _Stream(reply)
+    return _Response(reply)
 
 
 litellm.completion = _fake_completion

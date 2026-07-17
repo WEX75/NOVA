@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     status TEXT NOT NULL DEFAULT 'pending',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    final_output TEXT
+    final_output TEXT,
+    abort_requested INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS runtime_status (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -107,11 +108,14 @@ class Backlog:
         self._conn = sqlite3.connect(str(db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
-        # Migration for DBs created before final_output existed — CREATE TABLE
-        # IF NOT EXISTS never adds columns to an existing table.
+        # Migrations for DBs created before these columns existed — CREATE
+        # TABLE IF NOT EXISTS never adds columns to an existing table.
         cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(tasks)")}
         if "final_output" not in cols:
             self._conn.execute("ALTER TABLE tasks ADD COLUMN final_output TEXT")
+        if "abort_requested" not in cols:
+            self._conn.execute(
+                "ALTER TABLE tasks ADD COLUMN abort_requested INTEGER NOT NULL DEFAULT 0")
         self._conn.commit()
         # After the schema exists: from here on this connection cannot even
         # prepare an UPDATE/DELETE against the episodic log.
@@ -177,6 +181,25 @@ class Backlog:
     # Mail.Read is read-only by construction, so messages stay "unread" in the
     # mailbox and every poll re-fetches them; this table is what stops one
     # email from becoming a new task per poll.
+
+    # --- abort signalling (§13/§14) ---
+    # The dashboard's POST /api/task/abort runs in a different PROCESS from
+    # the loop holding the in-flight model call, so the signal must be
+    # durable: a flag on the task row, polled by llm.complete() between
+    # stream chunks. Never cleared — task_ids are never reused, and a stale
+    # flag on a terminal task can never fire again.
+
+    def request_abort(self, task_id: str) -> None:
+        self._conn.execute(
+            "UPDATE tasks SET abort_requested=1, updated_at=? WHERE task_id=?",
+            (datetime.now(timezone.utc).isoformat(), task_id))
+        self._conn.commit()
+
+    def abort_requested(self, task_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT abort_requested FROM tasks WHERE task_id=?",
+            (task_id,)).fetchone()
+        return bool(row and row["abort_requested"])
 
     def email_already_ingested(self, message_id: str) -> bool:
         row = self._conn.execute(

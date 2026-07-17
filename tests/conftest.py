@@ -92,6 +92,47 @@ class FakeLLMResponse:
         self.usage = _FakeUsage()
 
 
+class _FakeDelta:
+    def __init__(self, content):
+        self.content = content
+
+
+class _FakeStreamChoice:
+    def __init__(self, content):
+        self.delta = _FakeDelta(content)
+
+
+class _FakeChunk:
+    def __init__(self, content, usage=None):
+        self.choices = [_FakeStreamChoice(content)]
+        self.usage = usage
+
+
+class FakeLLMStream:
+    """Mimics litellm's CustomStreamWrapper shape as llm.complete() uses it:
+    iterable chunks with .choices[0].delta.content, usage on the last chunk,
+    and a completion_stream whose streaming_response is closeable. Content is
+    split so the accumulation path is actually exercised."""
+
+    def __init__(self, content):
+        mid = max(1, len(content) // 2)
+        pieces = [content[:mid], content[mid:]] if content else [""]
+
+        class _Inner:
+            closed = False
+            def _gen(inner_self):
+                yield  # never iterated by complete(); exists to be closeable
+            def __init__(inner_self):
+                inner_self.streaming_response = inner_self._gen()
+        self.completion_stream = _Inner()
+        self._chunks = [
+            _FakeChunk(p, usage=_FakeUsage() if i == len(pieces) - 1 else None)
+            for i, p in enumerate(pieces)]
+
+    def __iter__(self):
+        return iter(self._chunks)
+
+
 @pytest.fixture
 def fake_llm(monkeypatch):
     """Patch litellm.completion. Returns a controller: set .reply (str or
@@ -107,6 +148,8 @@ def fake_llm(monkeypatch):
     def fake_completion(**kwargs):
         ctl.calls.append(kwargs)
         content = ctl.reply(kwargs) if callable(ctl.reply) else ctl.reply
+        if kwargs.get("stream"):
+            return FakeLLMStream(content)
         return FakeLLMResponse(content)
 
     monkeypatch.setattr(litellm, "completion", fake_completion)

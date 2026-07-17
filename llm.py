@@ -15,7 +15,8 @@ embed model at startup.
 from __future__ import annotations
 
 import os
-from typing import Optional
+import time
+from typing import Callable, Optional
 
 import litellm
 from pydantic import BaseModel, Field
@@ -24,6 +25,23 @@ import secrets_store
 from nova_state import AgentRole, ModelProvider
 
 OLLAMA_BASE = os.environ.get("NOVA_OLLAMA_BASE", "http://localhost:11434")
+
+# Wall-clock ceiling for one completion. Grounded in observation, not guessed:
+# live single qwen2.5-coder:14b calls on this box measured ~13s and ~27s, and
+# a cold model load adds ~6s — 120s is ~4x the worst observed steady call with
+# cold-load headroom. A timeout closes the connection, which Ollama honors by
+# cancelling generation server-side (verified 2026-07-17, Ollama 0.31.1:
+# gpu_busy_percent 98 -> 0 within seconds of the client giving up).
+DEFAULT_TIMEOUT = float(os.environ.get("NOVA_LLM_TIMEOUT", "120"))
+
+# How often the cancellable path re-checks the abort signal between chunks.
+_ABORT_POLL_SECONDS = 0.3
+
+
+class LLMAborted(RuntimeError):
+    """An external abort signal cancelled the call. NOT a transport failure:
+    this is an owner decision, so callers must treat it as terminal — never
+    retry it, never route it through llm_transport_failure."""
 
 # Long-term memory embeddings (project guide §9). Local by design: memory content
 # is business updates/preferences — privacy-sensitive by default — so it never
@@ -80,15 +98,56 @@ def resolve_model(agent: AgentRole, force_local: bool = False) -> tuple[str, Mod
     return MODEL_MAP[agent]
 
 
-def complete(request: LLMRequest) -> LLMResponse:
+def _close_stream(stream) -> None:
+    """Really close a litellm stream's underlying HTTP connection.
+
+    litellm's CustomStreamWrapper has no close() of its own, and simply
+    abandoning the iterator leaves the connection open — measured on this
+    box: Ollama then generates the discarded answer to completion with the
+    GPU pinned ~97%. Closing the wrapped httpx line-generator
+    (completion_stream.streaming_response) closes the socket, and Ollama
+    honors the disconnect by cancelling generation (gpu_busy_percent -> 0
+    within seconds; verified 2026-07-17 on Ollama 0.31.1). Best-effort by
+    design: a close failure must not mask the reason we are closing."""
+    inner = getattr(stream, "completion_stream", None)
+    for obj in (getattr(inner, "streaming_response", None),
+                getattr(inner, "response_iterator", None),
+                inner):
+        close = getattr(obj, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # noqa: BLE001, S110 — cleanup only
+                pass
+
+
+def complete(request: LLMRequest, *, timeout: Optional[float] = None,
+             should_abort: Optional[Callable[[], bool]] = None) -> LLMResponse:
     """One completion, any backend. Raises on transport errors — callers
-    (nodes) own retry/escalation bookkeeping per project guide §4."""
+    (nodes) own retry/escalation bookkeeping per project guide §4.
+
+    ONE cancellation mechanism, two triggers (§14): `timeout` (wall-clock,
+    DEFAULT_TIMEOUT unless overridden) and `should_abort` (an external
+    signal, polled between stream chunks). Both end the call by closing the
+    underlying connection, which really stops Ollama's generation. A timeout
+    raise is deliberately a plain exception so it rides the EXISTING
+    llm_transport_failure path — retry then human gate, no quota charge, no
+    new failure category. An abort raises LLMAborted, which is terminal.
+
+    Without `should_abort` the call is non-streaming and litellm's own
+    timeout closes the connection (same measured effect). With it, the call
+    streams so there is a connection to close mid-generation."""
     model, provider = resolve_model(request.agent, request.force_local)
+    timeout = DEFAULT_TIMEOUT if timeout is None else timeout
+
+    if should_abort is not None and should_abort():
+        raise LLMAborted(f"{model}: abort requested before the call started")
 
     kwargs: dict = {
         "model": model,
         "messages": [m.model_dump() for m in request.messages],
         "temperature": request.temperature,
+        "timeout": timeout,
     }
     if request.max_tokens is not None:
         kwargs["max_tokens"] = request.max_tokens
@@ -97,11 +156,45 @@ def complete(request: LLMRequest) -> LLMResponse:
     elif (api_key := secrets_store.get_secret(PROVIDER_KEYS[provider])) is not None:
         kwargs["api_key"] = api_key
 
-    resp = litellm.completion(**kwargs)
+    if should_abort is None:
+        resp = litellm.completion(**kwargs)
+        usage = getattr(resp, "usage", None)
+        return LLMResponse(
+            content=resp.choices[0].message.content or "",
+            model_name=model,
+            provider=provider,
+            tokens_used=getattr(usage, "total_tokens", None),
+            cloud_call=provider is not ModelProvider.OLLAMA_LOCAL,
+        )
 
-    usage = getattr(resp, "usage", None)
+    # Cancellable path: stream, and always close — see _close_stream for why
+    # abandoning the wrapper would leave the GPU computing a discarded answer.
+    deadline = time.monotonic() + timeout
+    stream = litellm.completion(**kwargs, stream=True)
+    parts: list[str] = []
+    usage = None
+    last_poll = 0.0
+    try:
+        for chunk in stream:
+            now = time.monotonic()
+            if now > deadline:
+                raise TimeoutError(
+                    f"{model}: generation exceeded {timeout:.0f}s wall clock")
+            if now - last_poll >= _ABORT_POLL_SECONDS:
+                last_poll = now
+                if should_abort():
+                    raise LLMAborted(f"{model}: abort requested mid-generation")
+            choices = getattr(chunk, "choices", None)
+            if choices:
+                delta = getattr(choices[0].delta, "content", None)
+                if delta:
+                    parts.append(delta)
+            usage = getattr(chunk, "usage", None) or usage
+    finally:
+        _close_stream(stream)
+
     return LLMResponse(
-        content=resp.choices[0].message.content or "",
+        content="".join(parts),
         model_name=model,
         provider=provider,
         tokens_used=getattr(usage, "total_tokens", None),

@@ -25,6 +25,19 @@ def configure(backlog: Backlog) -> None:
     _backlog = backlog
 
 
+def abort_requested(task_id: Optional[str]) -> bool:
+    """Cross-process abort flag (§13 dashboard -> §14 in-flight cancel),
+    read through the same configured Backlog the audit log writes through.
+    False when unconfigured or on any read error: the absence of a signal
+    is not an error, and an abort check must never break a running call."""
+    if task_id is None or _backlog is None:
+        return False
+    try:
+        return _backlog.abort_requested(task_id)
+    except Exception:  # noqa: BLE001 — see docstring
+        return False
+
+
 def log_action(task_id: Optional[str], actor: str, action_type: str,
                detail: dict, reason: str) -> None:
     """Never raises: an audit-log failure must not mask or abort the action's

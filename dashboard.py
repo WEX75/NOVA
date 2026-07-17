@@ -19,9 +19,9 @@ domain at 127.0.0.1. Two header checks close this:
   - POST requires Content-Type: application/json, which is never a
     "simple" type — forcing a CORS preflight this server never answers
     (no CORS headers, no OPTIONS handler, deliberately).
-Reads use per-request read-only SQLite connections; the one write endpoint
-(POST /api/decision) opens a fresh Backlog per request, so no connection
-ever crosses threads.
+Reads use per-request read-only SQLite connections; each write endpoint
+(POST /api/decision, /api/chat/submit, /api/task/abort) opens a fresh
+Backlog per request, so no connection ever crosses threads.
 """
 
 from __future__ import annotations
@@ -33,7 +33,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from backlog import Backlog, TaskRecord
+from backlog import Backlog, EpisodicEntry, TaskRecord
+
+ABORT_REASON = "Aborted by user via dashboard"
 
 _PAGE = Path(__file__).parent / "dashboard.html"
 BIND_HOST = "127.0.0.1"  # never expose beyond the local machine
@@ -171,6 +173,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._post_decision()
         elif path == "/api/chat/submit":
             self._post_chat_submit()
+        elif path == "/api/task/abort":
+            self._post_task_abort()
         else:
             self._json(404, {"error": "not found"})
 
@@ -198,6 +202,40 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             backlog.record_decision(task_id, approved)
             self._json(200, {"ok": True, "task_id": task_id, "approved": approved})
+        finally:
+            backlog.close()
+
+    def _post_task_abort(self) -> None:
+        """Owner cancellation (§14). Sets the durable abort flag FIRST so the
+        loop's in-flight model call (which polls it between stream chunks)
+        sees it as early as possible, then fails the row and audit-logs. The
+        in-flight cancellation really stops local generation — llm.complete()
+        closes the connection and Ollama cancels server-side (verified; see
+        llm._close_stream). Runs behind the same Host/media-type gate as
+        every other POST, by construction (do_POST dispatches after both)."""
+        try:
+            data = self._read_body()
+            task_id = str(data["task_id"])
+        except (KeyError, ValueError, json.JSONDecodeError):
+            self._json(400, {"error": "expected JSON {task_id}"})
+            return
+
+        backlog = Backlog(self.server.db_path)  # fresh rw connection per request
+        try:
+            task = backlog.get_task(task_id)
+            if task is None:
+                self._json(404, {"error": f"no such task: {task_id}"})
+                return
+            if task.status in TERMINAL:
+                self._json(409, {"error": f"task is already {task.status}"})
+                return
+            backlog.request_abort(task_id)
+            backlog.update_status(task_id, "failed", final_output=ABORT_REASON)
+            backlog.log(EpisodicEntry(task_id=task_id, actor="human",
+                                      action_type="task_aborted",
+                                      detail={"via": "dashboard"},
+                                      reason=ABORT_REASON))
+            self._json(200, {"ok": True, "task_id": task_id})
         finally:
             backlog.close()
 

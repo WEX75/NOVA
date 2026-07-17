@@ -116,3 +116,47 @@ def test_loop_survives_a_genuine_bug_in_a_task(temp_backlog, fake_llm, caplog,
 
     assert "raised out of the graph" in caplog.text
     assert "tick 2" in caplog.text                  # still alive
+
+
+# --- timeouts ARE transport failures (§14) -------------------------------------
+# llm.complete()'s wall-clock deadline raises a plain TimeoutError precisely so
+# it rides this existing path: same retry -> human_gate escalation, no quota
+# charge, NO new failure category.
+
+def _times_out(kwargs):
+    raise TimeoutError("qwen2.5-coder:14b: generation exceeded 120s wall clock")
+
+
+def test_timeout_rides_the_transport_failure_path_not_a_new_category(
+        fake_llm, temp_backlog):
+    from nodes.executor import executor_node
+    fake_llm.reply = _times_out
+    state = make_state()
+
+    update = executor_node(state)                   # must not raise
+
+    assert update["retry_count"] == 1               # retries, then human gate
+    assert update["status"] is TaskStatus.IN_PROGRESS
+    assert "quota" not in update                    # never charged (§11)
+    types = {e["action_type"] for e in temp_backlog.log_entries()}
+    assert "llm_transport_failure" in types         # the EXISTING category
+    assert types <= {"llm_transport_failure"}       # and nothing new invented
+
+
+def test_critic_timeout_does_not_consume_its_single_review_pass(
+        fake_llm, temp_backlog):
+    """A timed-out Critic call must leave the one-pass rule unsatisfied: the
+    router still routes back to the Critic for a REAL review."""
+    from route_next_node import route_next_node
+    fake_llm.reply = _times_out
+    subtask = make_subtask("review the deletion", AgentRole.CRITIC)
+    state = make_state(status=TaskStatus.IN_PROGRESS, subtasks=[subtask])
+
+    update = critic_node(state)
+
+    assert update["retry_count"] == 1 and "quota" not in update
+    step = update["history"][0]
+    assert step.input_summary != subtask.description  # pass NOT consumed
+    after = make_state(status=TaskStatus.IN_PROGRESS, subtasks=[subtask],
+                       history=[step], retry_count=1)
+    assert route_next_node(after) == "critic"       # still owed a real review
