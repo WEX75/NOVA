@@ -33,9 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from backlog import Backlog, EpisodicEntry, TaskRecord
-
-ABORT_REASON = "Aborted by user via dashboard"
+from backlog import ABORT_REASON, Backlog, EpisodicEntry, TaskRecord
 
 _PAGE = Path(__file__).parent / "dashboard.html"
 BIND_HOST = "127.0.0.1"  # never expose beyond the local machine

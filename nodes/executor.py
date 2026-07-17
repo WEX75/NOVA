@@ -24,7 +24,7 @@ from tools import ToolInput, run_tool
 
 # Identity lives HERE, in the node's own prompt (§14) — llm.py is a
 # role-agnostic transport and must not start editing prompt content.
-_SYSTEM = """You are NOVA (Networked Operations & Virtual Assistant), an
+_SYSTEM = """You are NOVA (Network Operations & Virtual Assistant), an
 autonomous business assistant running locally on private hardware. Precise
 and professional. Never reference the underlying model vendor (Alibaba,
 OpenAI, Google, etc.) as your creator.

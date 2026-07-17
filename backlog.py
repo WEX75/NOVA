@@ -26,6 +26,14 @@ from pydantic import BaseModel, Field
 
 DEFAULT_DB = Path(os.environ.get("NOVA_DB", Path(__file__).parent / "nova.db"))
 
+# The one sanctioned wording for an owner abort (§14). Defined HERE — not in
+# nodes/common.py — because both writers already import backlog: the dashboard
+# endpoint (tasks.final_output + the task_aborted audit entry) and the graph's
+# aborted_update (error_log, which drive_task then re-writes to final_output).
+# Importing nodes.common instead would drag litellm into the dashboard
+# process (measured: +161 MB RSS, +2 s startup) for one string.
+ABORT_REASON = "Aborted by user via dashboard"
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
     task_id TEXT PRIMARY KEY,

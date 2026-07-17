@@ -13,6 +13,7 @@ import re
 from typing import Optional
 
 from action_log import log_action
+from backlog import ABORT_REASON  # single definition — see backlog.py
 from llm import LLMResponse
 from nova_state import (AgentRole, AgentStep, NovaState, QuotaTracker,
                         TaskStatus, ToolCallResult)
@@ -96,9 +97,6 @@ def transport_failure_update(state: NovaState, agent: AgentRole, exc: Exception,
                reason="model call raised before returning — infrastructure, not task, failure")
     return {**failure_update(state, step, f"{agent.value}: transport failure: {exc}"),
             "current_agent": agent}
-
-
-ABORT_REASON = "Aborted by user via dashboard"
 
 
 def aborted_update(state: NovaState, agent: AgentRole, input_summary: str,
