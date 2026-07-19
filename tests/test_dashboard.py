@@ -359,3 +359,28 @@ def test_abort_sets_the_flag_fails_the_task_and_audit_logs(dash, temp_backlog):
     assert temp_backlog.abort_requested("t-run") is True   # the loop's signal
     assert any(e["action_type"] == "task_aborted"          # audit-logged (§4)
                for e in temp_backlog.log_entries(task_id="t-run"))
+
+
+# --- tutor mode via chat (§15) --------------------------------------------------
+
+def test_chat_submit_tutor_flag_creates_a_tutor_task(dash, temp_backlog):
+    r = requests.post(f"{dash}/api/chat/submit",
+                      json={"message": "quiz me on Big-O", "tutor": True})
+    assert r.status_code == 200
+    task = temp_backlog.get_task(r.json()["task_id"])
+    assert task.source == "tutor" and task.status == "pending"
+
+    r = requests.post(f"{dash}/api/chat/submit", json={"message": "plain task"})
+    assert temp_backlog.get_task(r.json()["task_id"]).source == "manual"
+
+
+def test_chat_history_includes_tutor_turns_with_source(dash, temp_backlog):
+    temp_backlog.add_task(TaskRecord(task_id="t-tut", goal="teach me heaps",
+                                     source="tutor", status="done"))
+    temp_backlog.update_status("t-tut", "done", final_output="What do you know?")
+
+    rows = requests.get(f"{dash}/api/chat/history").json()
+
+    row = next(h for h in rows if h["task_id"] == "t-tut")
+    assert row["source"] == "tutor"
+    assert row["final_output"] == "What do you know?"

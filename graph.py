@@ -22,7 +22,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
 from nodes import (critic_node, director_node, executor_node,
-                   human_gate_node, researcher_node)
+                   human_gate_node, researcher_node, tutor_node)
 from nova_state import NovaState
 from route_next_node import route_next_node
 
@@ -32,6 +32,7 @@ _ROUTES = {
     "critic": "critic",
     "executor": "executor",
     "human_gate": "human_gate",
+    "tutor": "tutor",
     END: END,
 }
 
@@ -53,9 +54,11 @@ def build_graph(checkpointer=None):
     workflow.add_node("critic", critic_node)
     workflow.add_node("executor", executor_node)
     workflow.add_node("human_gate", human_gate_node)
+    workflow.add_node("tutor", tutor_node)
 
     workflow.set_conditional_entry_point(route_next_node, _ROUTES)
-    for node in ("director", "researcher", "critic", "executor", "human_gate"):
+    for node in ("director", "researcher", "critic", "executor", "human_gate",
+                 "tutor"):
         workflow.add_conditional_edges(node, route_next_node, _ROUTES)
 
     return workflow.compile(

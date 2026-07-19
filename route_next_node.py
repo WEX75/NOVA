@@ -47,6 +47,13 @@ def route_next_node(state: NovaState) -> str:
     if state.requires_human_approval and state.approved is None:
         return "human_gate"
 
+    # 3b. Tutor-mode tasks (§15) go straight to the local tutor node — the
+    #     same direct-route pattern as privacy_sensitive below, added at the
+    #     owner's direction (2026-07-19). Deliberately after the terminal/
+    #     retry/gate checks so tutor transport failures still escalate.
+    if state.source == "tutor":
+        return "tutor"
+
     # 4. Privacy-sensitive tasks never touch the cloud Director/Critic.
     #    Everything — planning included — runs on the local Executor.
     if state.privacy_sensitive:

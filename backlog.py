@@ -190,6 +190,24 @@ class Backlog:
     # mailbox and every poll re-fetches them; this table is what stops one
     # email from becoming a new task per poll.
 
+    def recent_chat_turns(self, exclude_task_id: Optional[str] = None,
+                          limit: int = 8) -> list[tuple[str, str]]:
+        """The last `limit` COMPLETED conversation turns (manual + tutor
+        tasks, status done, reply present), oldest-first, as (goal,
+        final_output) pairs. This is the §15 chat-context window: every
+        task starts stateless, so the tutor rebuilds continuity from here.
+        Failed turns are excluded — their final_output is an error string,
+        noise as conversation."""
+        rows = self._conn.execute(
+            "SELECT goal, final_output FROM ("
+            "  SELECT goal, final_output, created_at, task_id FROM tasks "
+            "  WHERE source IN ('manual', 'tutor') AND status = 'done' "
+            "    AND final_output IS NOT NULL AND task_id != ? "
+            "  ORDER BY created_at DESC, task_id DESC LIMIT ?"
+            ") ORDER BY created_at ASC, task_id ASC",
+            (exclude_task_id or "", limit)).fetchall()
+        return [(r["goal"], r["final_output"]) for r in rows]
+
     # --- abort signalling (§13/§14) ---
     # The dashboard's POST /api/task/abort runs in a different PROCESS from
     # the loop holding the in-flight model call, so the signal must be

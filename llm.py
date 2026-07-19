@@ -37,6 +37,16 @@ DEFAULT_TIMEOUT = float(os.environ.get("NOVA_LLM_TIMEOUT", "120"))
 # How often the cancellable path re-checks the abort signal between chunks.
 _ABORT_POLL_SECONDS = 0.3
 
+# Local context window (§15). Ollama's default is num_ctx=4096 with SILENT
+# front-truncation — measured live 2026-07-19: a ~6000-token prompt was capped
+# to 2050 evaluated tokens with no client-visible error, and the model
+# confidently answered from the surviving tail. qwen2.5-coder:14b's max is
+# 32768. VRAM measured via `ollama ps`: 9.5 GB at 4096, 11 GB at 16384,
+# 15 GB at 32768 — the last fits but pins nearly all ~16 GB allocatable,
+# starving the embed model and desktop. 16384 is the safe operating point;
+# raise NOVA_NUM_CTX only with that tradeoff in mind.
+NUM_CTX = int(os.environ.get("NOVA_NUM_CTX", "16384"))
+
 
 class LLMAborted(RuntimeError):
     """An external abort signal cancelled the call. NOT a transport failure:
@@ -64,6 +74,7 @@ MODEL_MAP: dict[AgentRole, tuple[str, ModelProvider]] = {
     AgentRole.CRITIC: ("groq/llama-3.3-70b-versatile", ModelProvider.GROQ),
     AgentRole.EXECUTOR: ("ollama/qwen2.5-coder:14b", ModelProvider.OLLAMA_LOCAL),
     AgentRole.MANAGER: ("ollama/qwen2.5-coder:14b", ModelProvider.OLLAMA_LOCAL),
+    AgentRole.TUTOR: ("ollama/qwen2.5-coder:14b", ModelProvider.OLLAMA_LOCAL),
 }
 
 
@@ -153,6 +164,7 @@ def complete(request: LLMRequest, *, timeout: Optional[float] = None,
         kwargs["max_tokens"] = request.max_tokens
     if provider is ModelProvider.OLLAMA_LOCAL:
         kwargs["api_base"] = OLLAMA_BASE
+        kwargs["num_ctx"] = NUM_CTX  # never Ollama's silent 4096 default (§15)
     elif (api_key := secrets_store.get_secret(PROVIDER_KEYS[provider])) is not None:
         kwargs["api_key"] = api_key
 

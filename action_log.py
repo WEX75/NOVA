@@ -38,6 +38,20 @@ def abort_requested(task_id: Optional[str]) -> bool:
         return False
 
 
+def recent_chat_turns(exclude_task_id: Optional[str],
+                      limit: int = 8) -> list[tuple[str, str]]:
+    """Prior manual/tutor conversation turns for the tutor's context window
+    (§15), read through the same configured Backlog as abort_requested().
+    Empty when unconfigured or on error: the tutor then simply has no
+    history — degraded, not broken."""
+    if _backlog is None:
+        return []
+    try:
+        return _backlog.recent_chat_turns(exclude_task_id, limit)
+    except Exception:  # noqa: BLE001 — see docstring
+        return []
+
+
 def log_action(task_id: Optional[str], actor: str, action_type: str,
                detail: dict, reason: str) -> None:
     """Never raises: an audit-log failure must not mask or abort the action's

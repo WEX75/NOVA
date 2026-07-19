@@ -18,6 +18,7 @@ class AgentRole(str, Enum):
     CRITIC = "critic"           # Groq Llama 3.3 70B (cloud) — fast review/error-checking
     EXECUTOR = "executor"       # Ollama Qwen2.5-Coder (local) — file/code/git operations
     MANAGER = "manager"         # local — email triage, task backlog
+    TUTOR = "tutor"             # local — Socratic tutoring / code review, prose only (§15)
 
 
 class TaskStatus(str, Enum):
@@ -129,7 +130,7 @@ class NovaState(BaseModel):
     # --- Task identity ---
     task_id: str
     goal: str
-    source: Literal["email", "voice", "manual"] = "manual"
+    source: Literal["email", "voice", "manual", "tutor"] = "manual"
     privacy_sensitive: bool = False   # True = local Executor only, never leaves the machine
 
     # --- Planning ---

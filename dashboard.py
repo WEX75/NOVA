@@ -131,20 +131,20 @@ class _Handler(BaseHTTPRequestHandler):
         return [dict(r) for r in rows]
 
     def _chat_history(self, limit: int) -> list[dict]:
-        """The chat transcript is real task data: manual-source tasks
-        oldest-first (goal = the owner's message, final_output = NOVA's
-        reply). CLI `nova run` tasks are the same kind of input, so one
-        unified history. The subquery keeps the most RECENT rows when the
-        limit bites."""
+        """The chat transcript is real task data: manual- and tutor-source
+        tasks oldest-first (goal = the owner's message, final_output =
+        NOVA's reply). CLI `nova run` tasks are the same kind of input, so
+        one unified history. The subquery keeps the most RECENT rows when
+        the limit bites."""
         with self._ro() as conn:
             rows = conn.execute(
                 "SELECT * FROM ("
-                "  SELECT t.task_id, t.goal, t.status, t.created_at, t.updated_at, "
-                "         t.final_output, "
+                "  SELECT t.task_id, t.goal, t.status, t.source, t.created_at, "
+                "         t.updated_at, t.final_output, "
                 "         (SELECT approved FROM approval_decisions d "
                 "          WHERE d.task_id = t.task_id AND d.applied_at IS NULL) "
                 "         AS pending_decision "
-                "  FROM tasks t WHERE t.source = 'manual' "
+                "  FROM tasks t WHERE t.source IN ('manual', 'tutor') "
                 "  ORDER BY t.created_at DESC, t.task_id DESC LIMIT ?"
                 ") ORDER BY created_at ASC, task_id ASC", (limit,)).fetchall()
         return [dict(r) for r in rows]
@@ -240,12 +240,15 @@ class _Handler(BaseHTTPRequestHandler):
     def _post_chat_submit(self) -> None:
         """A chat message becomes a real manual task — the same defaults as
         `main.py run "<goal>"` (source='manual', status='pending', not
-        privacy-sensitive). The running loop drives it on its next tick
+        privacy-sensitive). With {"tutor": true} the task is created with
+        source='tutor' instead, which the router sends straight to the
+        local tutor node (§15). The running loop drives it on its next tick
         (main.start_new_pending); this process never touches a model, so
         there is no path from here to an LLM that isn't an audited task."""
         try:
             data = self._read_body()
             message = str(data["message"]).strip()
+            tutor = bool(data.get("tutor", False))
         except (KeyError, ValueError, json.JSONDecodeError):
             self._json(400, {"error": "expected JSON {message}"})
             return
@@ -256,7 +259,7 @@ class _Handler(BaseHTTPRequestHandler):
         backlog = Backlog(self.server.db_path)  # fresh rw connection per request
         try:
             backlog.add_task(TaskRecord(task_id=task_id, goal=message,
-                                        source="manual"))
+                                        source="tutor" if tutor else "manual"))
         finally:
             backlog.close()
         self._json(200, {"task_id": task_id})
