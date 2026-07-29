@@ -4,12 +4,14 @@
 #           systemctl --user daemon-reload && systemctl --user enable --now nova-voice
 # Logs:     journalctl --user -u nova-voice -f
 #
-# REQUIRES a system package this session could NOT install (sudo needs an
-# interactive password in this environment — confirmed, not skipped):
-#   sudo apt-get install -y libportaudio2
-# Without it, `import sounddevice` raises OSError('PortAudio library not
-# found') and this service will crash-loop. Install it once, by hand,
-# before enabling this unit.
+# REQUIRES the system package `libportaudio2` (owner-installed
+# 2026-07-30; `sudo apt-get install -y libportaudio2` if setting this up
+# fresh elsewhere). Without it, `import sounddevice` raises
+# OSError('PortAudio library not found') and this service crash-loops.
+#
+# Wake phrase is "Hey Jarvis" — NOT "Hey NOVA" (see project guide §16 for
+# why: openWakeWord ships only a few generic pre-trained models, a
+# custom "Hey NOVA" model was out of scope).
 #
 # Same user-scope reasoning as nova.service (project guide §11): real
 # microphone access needs the user's live audio session (PipeWire/
