@@ -62,6 +62,12 @@ CREATE TABLE IF NOT EXISTS approval_decisions (
     decided_at TEXT NOT NULL,
     applied_at TEXT
 );
+CREATE TABLE IF NOT EXISTS voice_status (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    updated_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    muted INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS ingested_emails (
     message_id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL,
@@ -260,6 +266,39 @@ class Backlog:
     def read_heartbeat(self) -> Optional[dict]:
         row = self._conn.execute("SELECT * FROM runtime_status WHERE id=1").fetchone()
         return dict(row) if row is not None else None
+
+    # --- voice daemon status/mute (§16) ---
+    # Two independent writers sharing one singleton row, same shape as
+    # runtime_status above: the DAEMON owns `status` (what it's actually
+    # doing right now — listening/muted/error), the DASHBOARD owns `muted`
+    # (the owner's toggle). Each write touches only its own column so
+    # neither writer can clobber the other's most recent value.
+
+    def write_voice_status(self, status: str) -> None:
+        self._conn.execute(
+            "INSERT INTO voice_status (id, updated_at, status, muted) "
+            "VALUES (1, ?, ?, 0) "
+            "ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, "
+            "status=excluded.status",
+            (datetime.now(timezone.utc).isoformat(), status))
+        self._conn.commit()
+
+    def set_voice_muted(self, muted: bool) -> None:
+        self._conn.execute(
+            "INSERT INTO voice_status (id, updated_at, status, muted) "
+            "VALUES (1, ?, 'unknown', ?) "
+            "ON CONFLICT(id) DO UPDATE SET muted=excluded.muted, "
+            "updated_at=excluded.updated_at",
+            (datetime.now(timezone.utc).isoformat(), int(muted)))
+        self._conn.commit()
+
+    def read_voice_status(self) -> Optional[dict]:
+        row = self._conn.execute("SELECT * FROM voice_status WHERE id=1").fetchone()
+        return dict(row) if row is not None else None
+
+    def is_voice_muted(self) -> bool:
+        row = self._conn.execute("SELECT muted FROM voice_status WHERE id=1").fetchone()
+        return bool(row and row["muted"])
 
     # --- headless approval decisions (project guide §13) ---
     # One-shot `nova approve/reject` processes write here; the running loop

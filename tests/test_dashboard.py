@@ -41,13 +41,16 @@ def test_root_serves_the_page(dash):
     assert "NOVA" in page
     # every API endpoint the backend serves is actually used by the page
     for endpoint in ("api/overview", "api/tasks", "api/log", "/api/decision",
-                     "/api/chat/submit", "/api/chat/history", "/api/task/abort"):
+                     "/api/chat/submit", "/api/chat/history", "/api/task/abort",
+                     "/api/voice/mute"):
         assert endpoint in page, endpoint
     # headline UI features
     assert "nova-theme" in page                  # dark/light choice persisted
     assert "Awaiting Your Decision" in page
     assert "Activity Feed" in page
     assert "Network Operations &amp; Virtual Assistant" in page   # chat welcome + tagline
+    assert "getUserMedia" in page                 # §16: camera, client-side only
+    assert "voice-mute-btn" in page                # §16: voice mute toggle
     # self-contained: nothing fetched from the network but our own API
     assert "http://" not in page.replace("http://www.w3.org", "")
     assert "https://" not in page
@@ -384,3 +387,44 @@ def test_chat_history_includes_tutor_turns_with_source(dash, temp_backlog):
     row = next(h for h in rows if h["task_id"] == "t-tut")
     assert row["source"] == "tutor"
     assert row["final_output"] == "What do you know?"
+
+
+# --- voice daemon status/mute (§16) ----------------------------------------------
+
+def test_overview_includes_voice_status_when_present(dash, temp_backlog):
+    data = requests.get(f"{dash}/api/overview").json()
+    assert data["voice"] is None                       # daemon never run yet
+
+    temp_backlog.write_voice_status("listening")
+    data = requests.get(f"{dash}/api/overview").json()
+    assert data["voice"]["status"] == "listening"
+    assert data["voice"]["muted"] == 0
+
+
+def test_voice_mute_mirrors_the_same_csrf_and_host_hardening(dash, temp_backlog):
+    body = json.dumps({"muted": True})
+    for ctype in ("text/plain", "application/x-www-form-urlencoded"):
+        r = requests.post(f"{dash}/api/voice/mute", data=body,
+                          headers={"Content-Type": ctype})
+        assert r.status_code == 415, ctype
+
+    r = requests.post(f"{dash}/api/voice/mute", json={"muted": True},
+                      headers={"Host": "evil.example"})
+    assert r.status_code == 403
+
+    assert temp_backlog.is_voice_muted() is False       # nothing landed
+
+
+def test_voice_mute_writes_the_flag_the_daemon_actually_polls(dash, temp_backlog):
+    r = requests.post(f"{dash}/api/voice/mute", json={"muted": True})
+    assert r.status_code == 200 and r.json() == {"ok": True, "muted": True}
+    assert temp_backlog.is_voice_muted() is True
+
+    r = requests.post(f"{dash}/api/voice/mute", json={"muted": False})
+    assert r.status_code == 200
+    assert temp_backlog.is_voice_muted() is False
+
+
+def test_voice_mute_rejects_malformed_body(dash):
+    r = requests.post(f"{dash}/api/voice/mute", json={"wrong_key": True})
+    assert r.status_code == 400

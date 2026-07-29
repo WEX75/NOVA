@@ -103,10 +103,12 @@ class _Handler(BaseHTTPRequestHandler):
     def _overview(self) -> dict:
         with self._ro() as conn:
             hb_row = conn.execute("SELECT * FROM runtime_status WHERE id=1").fetchone()
+            voice_row = conn.execute("SELECT * FROM voice_status WHERE id=1").fetchone()
             counts = {r["status"]: r["n"] for r in conn.execute(
                 "SELECT status, COUNT(*) AS n FROM tasks GROUP BY status")}
         heartbeat = dict(hb_row) if hb_row is not None else None
-        return {"heartbeat": heartbeat, "task_counts": counts}
+        voice = dict(voice_row) if voice_row is not None else None
+        return {"heartbeat": heartbeat, "task_counts": counts, "voice": voice}
 
     def _tasks(self, limit: int) -> list[dict]:
         with self._ro() as conn:
@@ -173,6 +175,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._post_chat_submit()
         elif path == "/api/task/abort":
             self._post_task_abort()
+        elif path == "/api/voice/mute":
+            self._post_voice_mute()
         else:
             self._json(404, {"error": "not found"})
 
@@ -234,6 +238,25 @@ class _Handler(BaseHTTPRequestHandler):
                                       detail={"via": "dashboard"},
                                       reason=ABORT_REASON))
             self._json(200, {"ok": True, "task_id": task_id})
+        finally:
+            backlog.close()
+
+    def _post_voice_mute(self) -> None:
+        """§16: the owner's mute toggle. Writes the SAME durable flag the
+        voice daemon polls every cycle (Backlog.set_voice_muted) — this is
+        not a UI-only state; the daemon is a separate process that checks
+        this exact row and skips wake-word inference entirely while set."""
+        try:
+            data = self._read_body()
+            muted = bool(data["muted"])
+        except (KeyError, ValueError, json.JSONDecodeError):
+            self._json(400, {"error": "expected JSON {muted}"})
+            return
+
+        backlog = Backlog(self.server.db_path)  # fresh rw connection per request
+        try:
+            backlog.set_voice_muted(muted)
+            self._json(200, {"ok": True, "muted": muted})
         finally:
             backlog.close()
 

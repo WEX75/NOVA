@@ -483,6 +483,9 @@ def main(argv: list[str] | None = None) -> int:
     p_reject.add_argument("task_id")
     p_dash = sub.add_parser("dashboard", help="local web dashboard (127.0.0.1 only)")
     p_dash.add_argument("--port", type=int, default=8765)
+    p_voice = sub.add_parser("voice", help="wake-word listener -> local STT -> task (§16)")
+    p_voice.add_argument("--whisper-model", default="base",
+                         help="faster-whisper model size (default: base)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, stream=sys.stdout,
@@ -502,6 +505,13 @@ def main(argv: list[str] | None = None) -> int:
         # decisions — it never talks to a model.
         import dashboard
         return dashboard.main(backlog.db_path, port=args.port)
+
+    if args.command == "voice":
+        # Also before preflight: this daemon never calls Ollama itself —
+        # it only writes tasks (source="voice") for the loop to drive
+        # later. Ollama readiness is the loop's concern, not this one's.
+        import voice
+        return voice.main_cli(backlog, whisper_model_size=args.whisper_model)
 
     quota = preflight()
 

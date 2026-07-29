@@ -1,0 +1,40 @@
+# NOVA voice daemon — optional companion user service to nova.service.
+#
+# Install:  cp nova-voice.service ~/.config/systemd/user/
+#           systemctl --user daemon-reload && systemctl --user enable --now nova-voice
+# Logs:     journalctl --user -u nova-voice -f
+#
+# REQUIRES a system package this session could NOT install (sudo needs an
+# interactive password in this environment — confirmed, not skipped):
+#   sudo apt-get install -y libportaudio2
+# Without it, `import sounddevice` raises OSError('PortAudio library not
+# found') and this service will crash-loop. Install it once, by hand,
+# before enabling this unit.
+#
+# Same user-scope reasoning as nova.service (project guide §11): real
+# microphone access needs the user's live audio session (PipeWire/
+# PulseAudio via PortAudio), which only exists after login — a system-
+# level unit cannot reach it, exactly like os_action app launches need
+# the graphical session.
+#
+# No Ollama dependency, no preflight, no StartLimit coupling: this daemon
+# never calls a model itself — it only writes tasks (source="voice") for
+# the loop to pick up and drive later. See project guide §16.
+
+[Unit]
+Description=NOVA voice daemon (wake-word -> local STT -> task)
+
+[Service]
+Type=exec
+WorkingDirectory=/home/wex/NOVA
+ExecStart=/home/wex/NOVA/.venv/bin/python /home/wex/NOVA/main.py voice
+Restart=on-failure
+RestartSec=5
+# SIGTERM finishes the in-flight cycle (at most a few seconds — one
+# wake-word check or one 6s speech capture) before exiting cleanly.
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
