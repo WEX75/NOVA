@@ -84,9 +84,19 @@ def _dispatch(state: NovaState, tool: ToolInput) -> str:
         return "\n".join(sorted(p.name for p in target.iterdir()))
 
     if name == "write_file":
+        # content=None (missing/malformed — e.g. a hallucinated tool call)
+        # must be a loud failure, never a silent `or ""` — that would
+        # truncate a real, possibly valuable, existing file to empty with
+        # no error at all. An explicit content="" (a deliberate empty
+        # file) is still allowed; only non-string content is rejected.
+        if not isinstance(tool.content, str):
+            raise ValueError(
+                f"write_file requires string content, got {tool.content!r} — "
+                "refusing to write (null/missing content would silently "
+                "truncate an existing file)")
         p = _safe_path(tool.path or "")
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(tool.content or "")
+        p.write_text(tool.content)
         return str(p)  # returned path becomes a known artifact (provenance)
 
     if name == "delete_file":

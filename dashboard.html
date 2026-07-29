@@ -1447,19 +1447,39 @@ function renderChat(history) {                    // API is oldest-first
 
   for (const t of history) {
     seen.add(t.task_id);
-    let turn = chatTurns.get(t.task_id);
-    if (!turn) {
-      turn = buildChatTurn(t);
-      chatTurns.set(t.task_id, turn);
-      if (!state.first) turn.classList.add("fresh");
+    // Per-item try/catch: one turn throwing (a bad status shape, a future
+    // regression) must not abort the loop and freeze every OTHER turn
+    // still pending behind it — and it must leave a visible, diagnosable
+    // trail instead of silently staying stuck on stale content forever.
+    try {
+      let turn = chatTurns.get(t.task_id);
+      if (!turn) {
+        turn = buildChatTurn(t);
+        chatTurns.set(t.task_id, turn);
+        if (!state.first) turn.classList.add("fresh");
+      }
+      delete turn.dataset.optimistic;             // confirmed by the server
+      const key = `${t.status}|${t.pending_decision ?? ""}|${t.final_output ?? ""}`;
+      if (turn.dataset.key !== key) {
+        turn.dataset.key = key;
+        turn.querySelector(".chat-reply").replaceChildren(chatReply(t));
+      }
+      chatLog.append(turn);                       // keeps chronological order
+    } catch (err) {
+      console.error(`renderChat: failed to render turn ${t.task_id}`, err);
+      let turn = chatTurns.get(t.task_id);
+      if (!turn) {
+        turn = el("div", "chat-turn");
+        turn.dataset.taskId = t.task_id;
+        turn.append(el("div", "msg msg-user", t.goal || ""), el("div", "chat-reply"));
+        chatTurns.set(t.task_id, turn);
+      }
+      turn.dataset.key = `render-error|${String(err)}`;
+      turn.querySelector(".chat-reply").replaceChildren(
+        el("div", "msg msg-nova msg-failed",
+          `Rendering error — check the browser console. (${err})`));
+      chatLog.append(turn);
     }
-    delete turn.dataset.optimistic;               // confirmed by the server
-    const key = `${t.status}|${t.pending_decision ?? ""}|${t.final_output ?? ""}`;
-    if (turn.dataset.key !== key) {
-      turn.dataset.key = key;
-      turn.querySelector(".chat-reply").replaceChildren(chatReply(t));
-    }
-    chatLog.append(turn);                         // keeps chronological order
   }
   for (const [id, turn] of chatTurns) {
     if (seen.has(id)) continue;
@@ -1685,7 +1705,13 @@ async function poll() {
     if (state.connected === false) toast("Reconnected to the dashboard server.", "ok");
     state.connected = true;
     state.first = false;
-  } catch {
+  } catch (err) {
+    // Surfaced, not silent: this catch previously swallowed the real
+    // error entirely, so a genuine JS bug anywhere in the render chain
+    // (not just a network failure) looked identical to "server
+    // unreachable" with zero diagnostic trail — exactly what this
+    // session's abort-flicker investigation needed and didn't have.
+    console.error("poll() failed:", err);
     if (state.connected !== false) renderUnreachable();
     state.connected = false;
   } finally {
