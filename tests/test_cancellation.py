@@ -129,4 +129,6 @@ def test_executor_system_prompt_carries_the_nova_identity(fake_llm, temp_backlog
     system = fake_llm.calls[-1]["messages"][0]
     assert system["role"] == "system"
     assert "You are NOVA (Network Operations & Virtual Assistant)" in system["content"]
-    assert "Never reference the underlying model vendor" in system["content"]
+    normalized = " ".join(system["content"].split())   # prompt line-wraps aren't load-bearing
+    assert ("I'm NOVA, an autonomous assistant built to run entirely on "
+           "this machine.") in normalized

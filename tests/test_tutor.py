@@ -142,6 +142,66 @@ def test_tutor_empty_reply_is_a_retry_not_done(fake_llm, temp_backlog):
     assert update["status"] is TaskStatus.IN_PROGRESS
 
 
+def test_file_attachment_accounts_for_header_overhead(fake_llm, temp_backlog,
+                                                       temp_workspace, monkeypatch):
+    """The minor accounting gap flagged in review: the '--- FILE: ... ---'
+    header must count against FILE_CHAR_BUDGET too, not just the body."""
+    import nodes.tutor as tutor_mod
+    monkeypatch.setattr(tutor_mod, "FILE_CHAR_BUDGET", 200)
+    (temp_workspace / "big.py").write_text("x = 1\n" * 200)   # 1200 chars, over budget
+    fake_llm.reply = PROSE
+
+    tutor_node(make_state(source="tutor", goal="review big.py please"))
+
+    last = fake_llm.calls[-1]["messages"][-1]["content"]
+    section = last[last.index("--- FILE: big.py"):]
+    assert len(section) <= 200                          # header + body + note, all counted
+
+
+# --- context budget (§15 follow-up, 2026-07-20): caps re-measured live -----------
+
+def test_goal_itself_is_capped_with_a_visible_note(fake_llm, temp_backlog):
+    """Item 1: state.goal was previously uncapped — a single large paste
+    bypassed every other budget in this file."""
+    from nodes.tutor import GOAL_CHAR_CAP
+    huge = "x" * (GOAL_CHAR_CAP + 5000)
+    fake_llm.reply = PROSE
+
+    tutor_node(make_state(source="tutor", goal=huge))
+
+    last = fake_llm.calls[-1]["messages"][-1]["content"]
+    assert len(last) < len(huge)
+    assert "truncated" in last and "ask to focus" in last
+
+
+def test_graceful_degradation_drops_oldest_history_first_with_a_visible_note(
+        fake_llm, temp_backlog, monkeypatch):
+    """Item 2 decision: if the budget would still be exceeded, drop the
+    OLDEST turns and say so — never repeat Ollama's own silent truncation.
+    Forces the branch deterministically (two turns of known, equal size;
+    a budget sized to fit exactly one) instead of needing gigantic content."""
+    import nodes.tutor as tutor_mod
+
+    for i, tag in enumerate(("old", "new")):
+        tid = f"t-hist-{tag}"
+        temp_backlog.add_task(TaskRecord(task_id=tid, goal=f"Q{tag} " + "Q" * 500,
+                                         source="tutor", status="done"))
+        temp_backlog.update_status(tid, "done", final_output=f"A{tag} " + "A" * 500)
+
+    reserved = len(tutor_mod._SYSTEM) + len("hi")   # goal="hi", no attachment
+    monkeypatch.setattr(tutor_mod, "SAFE_PROMPT_CHAR_BUDGET", reserved + 1500)
+    fake_llm.reply = PROSE
+
+    update = tutor_node(make_state(task_id="t-now", source="tutor", goal="hi"))
+
+    msgs = fake_llm.calls[-1]["messages"]
+    history_text = " ".join(m["content"] for m in msgs[1:-1])
+    assert "Qold" not in history_text and "Aold" not in history_text   # oldest dropped
+    assert "Qnew" in history_text                                     # newest kept
+    assert "1 earlier turn(s)" in msgs[-1]["content"]                  # visible, not silent
+    assert update["status"] is TaskStatus.DONE
+
+
 # --- graph level -----------------------------------------------------------------
 
 def test_tutor_task_runs_end_to_end_without_director_or_cloud(fake_llm,
@@ -157,6 +217,24 @@ def test_tutor_task_runs_end_to_end_without_director_or_cloud(fake_llm,
     assert final["status"] == TaskStatus.DONE
     assert final["final_output"] == PROSE
     assert all(c["model"].startswith("ollama/") for c in fake_llm.calls)
+
+
+# --- tutor timeout/max_tokens (§15 follow-up: the latency landmine the ------------
+# token-budget fix exposed — a large-context first call after model load
+# measured 89-95s, separate from the ~120s DEFAULT_TIMEOUT sized for the
+# executor's short calls)
+
+def test_tutor_uses_its_own_measured_timeout_and_bounded_max_tokens(
+        fake_llm, temp_backlog):
+    from nodes.tutor import TUTOR_MAX_TOKENS, TUTOR_TIMEOUT
+    fake_llm.reply = PROSE
+
+    tutor_node(make_state(source="tutor", goal="teach me"))
+
+    call = fake_llm.calls[-1]
+    assert call["timeout"] == TUTOR_TIMEOUT
+    assert call["max_tokens"] == TUTOR_MAX_TOKENS
+    assert TUTOR_TIMEOUT > llm.DEFAULT_TIMEOUT   # deliberately more generous
 
 
 # --- num_ctx (§15: the silent-truncation landmine) -------------------------------
