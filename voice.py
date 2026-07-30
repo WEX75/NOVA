@@ -32,6 +32,39 @@ mute are independent writers on one shared row (Backlog.write_voice_status
 is daemon-owned, Backlog.set_voice_muted is dashboard-owned) — see
 backlog.py's §16 section for why neither can clobber the other.
 
+Retrigger fix (§16 follow-up, 2026-07-30). One real utterance was
+producing 4-8 spurious extra "tasks" from near-silence in the seconds
+after a genuine trigger. Root cause, traced precisely: during
+CAPTURE_SECONDS of speech capture, raw audio is read directly via
+mic.read_chunk() and NEVER fed through wake_model.predict() — so
+openWakeWord's internal feature buffer (melspectrogram/embedding history
+inside its AudioFeatures preprocessor) stays frozen at whatever it held
+at the moment of the original trigger. openWakeWord's own Model.reset()
+does NOT clear this — it only clears the unrelated prediction_buffer used
+by the opt-in `patience` option; there is no public API to flush the
+feature buffer directly. The first predict() call(s) after capture ends
+see mostly-stale, trigger-adjacent features, and score above threshold
+again — a leak of the SAME trigger across multiple predict() calls, not
+a new detection. Simply "not calling predict() for N seconds" (an
+initial hypothesis) would NOT fix this: the buffer only advances on
+predict() calls, not wall-clock time, so skipping inference during a
+cooldown leaves it exactly as stale when the cooldown ends. The fix
+below instead keeps calling predict() (to genuinely flush the buffer
+with real, current audio) but discards every score for
+REFRACTORY_SECONDS after any capture.
+
+Live-measured RMS energy (2026-07-30, real mic, real room) showed the
+spurious captures are genuinely near-silent — 0.0016-0.0044, close to
+the measured ambient baseline of 0.0019 — while real speech measured
+0.0197, ~10x higher. Whisper, true to its documented behavior, still
+hallucinated short plausible-sounding text from that near-silence
+("You", earlier "I'm not sure if I can make a video...") rather than
+returning empty — confirming an energy gate is the right fix, not a
+smarter transcription check. VAD_RMS_THRESHOLD (0.01) skips Whisper
+entirely, and skips task creation entirely, for anything captured below
+it — near-silence never reaches the LLM pipeline as a "task" in the
+first place.
+
 The microphone is injected via the MicSource protocol specifically so
 this module's actual logic — wake detection, mute enforcement,
 transcription, task creation, and the audio-never-persisted guarantee —
@@ -63,6 +96,15 @@ CAPTURE_SECONDS = 6.0          # fixed window of speech captured after a trigger
 WAKE_THRESHOLD = 0.5           # openWakeWord's own convention
 STATUS_INTERVAL_SECONDS = 5.0  # how often "listening" is re-written while idle
 MUTED_POLL_SECONDS = 1.0
+
+# Retrigger fix (§16 follow-up, 2026-07-30) — see module docstring's
+# "Retrigger fix" section for the full investigation. Both constants are
+# calibrated from real live captures on this machine, not guessed:
+# ambient/near-silence RMS measured 0.0016-0.0044 (quiet-room baseline
+# 0.0019); real speech measured 0.0197. 0.01 sits with ~2x margin on
+# both sides.
+VAD_RMS_THRESHOLD = 0.01
+REFRACTORY_SECONDS = 2.0
 
 
 class MicSource(Protocol):
@@ -109,17 +151,34 @@ def _load_models(wakeword_model_path: Optional[str], whisper_model_size: str):
     return wake, whisper
 
 
-def _capture_and_transcribe(mic: MicSource, whisper, n_chunks: int) -> str:
-    """The only place raw audio exists: a local list, concatenated into one
-    local array, transcribed, and then never referenced again. Nothing here
-    writes to disk."""
+def _capture_audio(mic: MicSource, n_chunks: int) -> np.ndarray:
+    """Read n_chunks of raw audio into one local int16 buffer. Caller owns
+    its lifetime and must discard it promptly — see the audio-never-
+    persisted guarantee in the module docstring."""
     frames = [mic.read_chunk() for _ in range(n_chunks)]
-    audio = np.concatenate(frames).astype(np.float32) / 32768.0
+    audio = np.concatenate(frames)
     del frames
-    segments, _info = whisper.transcribe(audio, language="en")
-    text = " ".join(seg.text.strip() for seg in segments).strip()
-    del audio  # explicit: the buffer's lifetime ends here, on purpose
-    return text
+    return audio
+
+
+def _rms(audio_int16: np.ndarray) -> float:
+    """RMS energy of a raw int16 buffer, normalized to [0, 1]. This is a
+    DERIVED scalar — like the transcribed text — not audio data itself, so
+    logging it does not touch the audio-never-persisted guarantee; the
+    buffer it was computed from is still discarded immediately after use,
+    exactly as before."""
+    if audio_int16.size == 0:
+        return 0.0
+    samples = audio_int16.astype(np.float64) / 32768.0
+    return float(np.sqrt(np.mean(samples ** 2)))
+
+
+def _transcribe(whisper, audio_int16: np.ndarray) -> str:
+    """The only place raw audio is fed to a model. Nothing here writes to
+    disk; the caller discards audio_int16 right after this returns."""
+    audio_f32 = audio_int16.astype(np.float32) / 32768.0
+    segments, _info = whisper.transcribe(audio_f32, language="en")
+    return " ".join(seg.text.strip() for seg in segments).strip()
 
 
 def _make_voice_task(backlog: Backlog, text: str) -> Optional[str]:
@@ -135,6 +194,8 @@ def run_voice_daemon(backlog: Backlog, mic: Optional[MicSource] = None,
                      wakeword_model_path: Optional[str] = None,
                      whisper_model_size: str = "base",
                      wake_model=None, whisper_model=None,
+                     vad_rms_threshold: float = VAD_RMS_THRESHOLD,
+                     refractory_seconds: float = REFRACTORY_SECONDS,
                      stop: Optional[Callable[[], bool]] = None,
                      max_iterations: Optional[int] = None) -> None:
     """Persistent loop. `stop`, when given, is polled each cycle (matches
@@ -146,7 +207,13 @@ def run_voice_daemon(backlog: Backlog, mic: Optional[MicSource] = None,
     is (tests use lightweight fakes — this project's established pattern,
     see conftest.py's fake_llm — rather than downloading and loading real
     model weights on every test run); the real daemon leaves them None and
-    gets the genuine openWakeWord/faster-whisper models."""
+    gets the genuine openWakeWord/faster-whisper models.
+
+    `vad_rms_threshold`/`refractory_seconds` are injectable so tests can
+    run the refractory window at ~0s (it is a real wall-clock sleep loop
+    in production — see the module docstring's "Retrigger fix" section)
+    without every triggered-capture test taking REFRACTORY_SECONDS
+    real seconds."""
     stop = stop or (lambda: False)
     mic_owned = mic is None
     mic = mic or RealMicSource()
@@ -182,12 +249,36 @@ def run_voice_daemon(backlog: Backlog, mic: Optional[MicSource] = None,
 
                 log.info("voice daemon: wake word triggered, capturing speech")
                 n_chunks = int(CAPTURE_SECONDS * SAMPLE_RATE / CHUNK_SAMPLES)
-                text = _capture_and_transcribe(mic, whisper_model, n_chunks)
-                task_id = _make_voice_task(backlog, text)
-                if task_id:
-                    log.info("voice daemon: created task %s from speech", task_id)
+                audio = _capture_audio(mic, n_chunks)
+                rms = _rms(audio)
+                if rms < vad_rms_threshold:
+                    # Near-silence never reaches Whisper or becomes a task —
+                    # see module docstring: Whisper hallucinates plausible
+                    # text from near-silence rather than returning empty,
+                    # so skipping it here (not just checking its output) is
+                    # what actually keeps ambient noise out of the pipeline.
+                    log.info("voice daemon: capture below energy threshold "
+                            "(rms=%.5f < %.5f) — near-silence, skipping "
+                            "transcription, no task created", rms, vad_rms_threshold)
                 else:
-                    log.info("voice daemon: transcription was empty, no task created")
+                    text = _transcribe(whisper_model, audio)
+                    task_id = _make_voice_task(backlog, text)
+                    if task_id:
+                        log.info("voice daemon: created task %s from speech (rms=%.5f)",
+                                 task_id, rms)
+                    else:
+                        log.info("voice daemon: transcription was empty, "
+                                "no task created (rms=%.5f)", rms)
+                del audio  # discarded immediately — see module docstring
+
+                # Refractory: keep running REAL inference (to flush the wake
+                # model's stale feature buffer with genuinely current audio)
+                # but discard every score for refractory_seconds — see the
+                # module docstring for why merely not calling predict() here
+                # would leave the buffer just as stale when this ends.
+                refractory_until = time.monotonic() + refractory_seconds
+                while time.monotonic() < refractory_until and not stop():
+                    wake_model.predict(mic.read_chunk())  # score discarded on purpose
             except Exception as e:  # noqa: BLE001 — one bad cycle must not kill the daemon
                 log.error("voice daemon: cycle failed: %s", e)
                 backlog.write_voice_status("error")
