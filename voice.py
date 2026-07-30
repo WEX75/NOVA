@@ -65,6 +65,21 @@ entirely, and skips task creation entirely, for anything captured below
 it — near-silence never reaches the LLM pipeline as a "task" in the
 first place.
 
+no_signal detection (§16 follow-up, 2026-07-30, same investigation).
+Diagnosing the ALSA-mute finding above took a side probe script and a
+manual `amixer` check — nothing in the daemon's own status surfaced that
+"listening" actually meant "the process is running, hearing exact
+silence" rather than "genuinely picking up the room." voice_status can
+now report "no_signal": if NO_SIGNAL_CHUNKS_THRESHOLD consecutive idle
+chunks read as bit-for-bit RMS 0.0 while unmuted, the periodic status
+write reports "no_signal" instead of "listening". This is deliberately
+distinct from "muted" (an owner choice) and "error" (a crash) — a dead
+mic with no code error at all is a real, silent-failure third state, not
+a variant of either. _ensure_alsa_capture_unmuted() (RealMicSource
+startup) is a best-effort fix for the ONE confirmed cause on this
+machine; no_signal is the general symptom detector that doesn't depend
+on the cause being that one thing again.
+
 The microphone is injected via the MicSource protocol specifically so
 this module's actual logic — wake detection, mute enforcement,
 transcription, task creation, and the audio-never-persisted guarantee —
@@ -106,6 +121,17 @@ MUTED_POLL_SECONDS = 1.0
 VAD_RMS_THRESHOLD = 0.01
 REFRACTORY_SECONDS = 2.0
 
+# no_signal detection (§16 follow-up, 2026-07-30): "listening" previously
+# meant only "the process is running," not "real audio is reaching it" —
+# the exact ambiguity that took a side probe script and an amixer check
+# to resolve this session. A truly dead/muted input reads as EXACTLY 0.0
+# RMS (bit-for-bit silence) on every chunk; genuine ambient room noise
+# never does — the calibration baseline measured 0.0019, not 0.0. 25
+# consecutive exact-zero 80ms chunks (~2s) is a deliberately generous
+# margin against one fluke all-zero buffer before surfacing this as a
+# distinct status, not a hair-trigger.
+NO_SIGNAL_CHUNKS_THRESHOLD = 25
+
 
 class MicSource(Protocol):
     """Yields raw int16 mono chunks of exactly CHUNK_SAMPLES, one per call,
@@ -115,11 +141,64 @@ class MicSource(Protocol):
     def close(self) -> None: ...
 
 
+def _ensure_alsa_capture_unmuted() -> None:
+    """Best-effort defensive fix (§16 follow-up, 2026-07-30): this
+    machine's ALSA capture switch was found muted at startup once already
+    — traced to /var/lib/alsa/asound.state genuinely persisting
+    `Capture Switch value false`, which alsa-restore.service re-applies
+    on EVERY boot (confirmed by reading the state file directly, not
+    guessed) — so a reboot silently re-mutes the mic with no daemon error
+    at all. This can only paper over that one specific, already-confirmed
+    cause; it is NOT a substitute for the no_signal daemon status below,
+    which detects the symptom (no real audio reaching the daemon)
+    regardless of cause. Never raises: a failed amixer call must not
+    block the daemon from starting, and the card number is a guess
+    (NOVA_VOICE_ALSA_CARD, default matching THIS machine) that may not
+    hold on different hardware."""
+    import subprocess
+    card = os.environ.get("NOVA_VOICE_ALSA_CARD", "1")
+    try:
+        out = subprocess.run(["amixer", "-c", card, "sget", "Capture"],
+                             capture_output=True, text=True, timeout=5)
+        if "[off]" not in out.stdout:
+            return  # already unmuted — nothing to do
+        log.warning("voice daemon: ALSA capture on card %s was muted at "
+                   "startup — unmuting (see project guide §16: this reverts "
+                   "on every reboot unless `alsactl store` is run)", card)
+        # "cap"/"nocap" are the ALSA simple-control keywords for this
+        # capture switch on this hardware — "mute"/"unmute" both returned
+        # "amixer: Invalid command!" when tried directly (verified live,
+        # 2026-07-30), and a first version of this function used "unmute"
+        # anyway (untested against a real re-mute) and silently did
+        # nothing — hence the self-verification below, not a fire-and-
+        # forget subprocess call.
+        subprocess.run(["amixer", "-c", card, "sset", "Capture", "cap"],
+                       capture_output=True, timeout=5)
+        subprocess.run(["amixer", "-c", card, "sset", "Capture", "80%"],
+                       capture_output=True, timeout=5)
+        verify = subprocess.run(["amixer", "-c", card, "sget", "Capture"],
+                                capture_output=True, text=True, timeout=5)
+        if "[off]" in verify.stdout:
+            log.error("voice daemon: attempted to unmute ALSA capture on "
+                     "card %s but it is STILL muted — the daemon will run "
+                     "but hear nothing; fix by hand with "
+                     "`amixer -c %s sset Capture cap` (project guide §16)",
+                     card, card)
+        else:
+            log.info("voice daemon: ALSA capture on card %s unmuted successfully", card)
+    except Exception as e:  # noqa: BLE001 — best-effort only, see docstring
+        log.warning("voice daemon: could not check/fix ALSA capture mute "
+                   "(%s) — if voice seems dead with no errors, check "
+                   "`amixer -c %s get Capture` by hand (project guide §16)",
+                   e, card)
+
+
 class RealMicSource:
     """The only piece of this module that touches actual hardware. Needs
     sounddevice + the system libportaudio2 (see module docstring)."""
 
     def __init__(self):
+        _ensure_alsa_capture_unmuted()
         import sounddevice as sd  # deferred: only this class needs it
         self._sd = sd
         self._stream = sd.InputStream(
@@ -196,6 +275,7 @@ def run_voice_daemon(backlog: Backlog, mic: Optional[MicSource] = None,
                      wake_model=None, whisper_model=None,
                      vad_rms_threshold: float = VAD_RMS_THRESHOLD,
                      refractory_seconds: float = REFRACTORY_SECONDS,
+                     status_interval_seconds: float = STATUS_INTERVAL_SECONDS,
                      stop: Optional[Callable[[], bool]] = None,
                      max_iterations: Optional[int] = None) -> None:
     """Persistent loop. `stop`, when given, is polled each cycle (matches
@@ -213,7 +293,11 @@ def run_voice_daemon(backlog: Backlog, mic: Optional[MicSource] = None,
     run the refractory window at ~0s (it is a real wall-clock sleep loop
     in production — see the module docstring's "Retrigger fix" section)
     without every triggered-capture test taking REFRACTORY_SECONDS
-    real seconds."""
+    real seconds. `status_interval_seconds` is injectable so tests can
+    force a status write on every iteration (0) — in production the
+    periodic 5s gate exists to avoid hammering the DB every 80ms, but
+    that same gate makes a fast test's status transitions (e.g.
+    no_signal) unobservable across a handful of near-instant iterations."""
     stop = stop or (lambda: False)
     mic_owned = mic is None
     mic = mic or RealMicSource()
@@ -224,6 +308,7 @@ def run_voice_daemon(backlog: Backlog, mic: Optional[MicSource] = None,
             whisper_model = whisper_model or real_whisper
         log.info("voice daemon: models loaded, listening")
         last_status_write = 0.0
+        consecutive_zero_chunks = 0
         iterations = 0
         while not stop():
             iterations += 1
@@ -232,16 +317,30 @@ def run_voice_daemon(backlog: Backlog, mic: Optional[MicSource] = None,
             try:
                 if backlog.is_voice_muted():
                     backlog.write_voice_status("muted")
+                    consecutive_zero_chunks = 0  # start clean whenever unmuted again
                     time.sleep(MUTED_POLL_SECONDS)
                     continue  # muted: no chunk is ever read, no inference ever runs
 
                 chunk = mic.read_chunk()
+                if _rms(chunk) == 0.0:
+                    consecutive_zero_chunks += 1
+                else:
+                    consecutive_zero_chunks = 0
                 scores = wake_model.predict(chunk)
                 triggered = any(score >= WAKE_THRESHOLD for score in scores.values())
 
                 now = time.monotonic()
-                if now - last_status_write >= STATUS_INTERVAL_SECONDS:
-                    backlog.write_voice_status("listening")
+                if now - last_status_write >= status_interval_seconds:
+                    # "listening" previously meant only "the process is
+                    # running" — no_signal distinguishes "genuinely no
+                    # audio reaching the daemon" (bit-for-bit silence,
+                    # unmuted) from real ambient-quiet listening (which
+                    # never reads as exact zero) and from muted (an
+                    # owner choice) and error (a crash). See module
+                    # docstring's "no_signal detection" note.
+                    status = ("no_signal" if consecutive_zero_chunks >= NO_SIGNAL_CHUNKS_THRESHOLD
+                             else "listening")
+                    backlog.write_voice_status(status)
                     last_status_write = now
 
                 if not triggered:

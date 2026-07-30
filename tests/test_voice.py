@@ -290,6 +290,177 @@ def test_a_transcription_failure_is_logged_and_the_daemon_keeps_going(temp_backl
     assert temp_backlog.read_voice_status()["status"] in ("error", "listening")
 
 
+# --- no_signal detection (§16 follow-up, 2026-07-30) ------------------------------
+
+def test_dead_mic_reports_no_signal_not_listening(temp_backlog):
+    """The core requirement: a genuinely dead/muted input (exact-zero RMS,
+    unmuted) must surface as its own distinct status — not silently look
+    like normal "listening"."""
+    from voice import NO_SIGNAL_CHUNKS_THRESHOLD
+    wake = FakeWakeModel()   # never triggers
+    mic = FakeMic(amplitude=0)   # bit-for-bit silence, every chunk
+
+    run_voice_daemon(temp_backlog, mic=mic, wake_model=wake,
+                     whisper_model=FakeWhisperModel(), status_interval_seconds=0,
+                     max_iterations=NO_SIGNAL_CHUNKS_THRESHOLD + 2)
+
+    assert temp_backlog.read_voice_status()["status"] == "no_signal"
+
+
+def test_real_ambient_noise_never_reports_no_signal(temp_backlog):
+    """Genuine (even quiet) ambient audio must never trip this — only
+    EXACT zero does. amplitude=1 still produces nonzero samples most of
+    the time (true int16 noise), unlike genuine silence."""
+    from voice import NO_SIGNAL_CHUNKS_THRESHOLD
+    wake = FakeWakeModel()
+    mic = FakeMic(amplitude=5000)   # normal "speech-level" fake audio
+
+    run_voice_daemon(temp_backlog, mic=mic, wake_model=wake,
+                     whisper_model=FakeWhisperModel(), status_interval_seconds=0,
+                     max_iterations=NO_SIGNAL_CHUNKS_THRESHOLD + 2)
+
+    assert temp_backlog.read_voice_status()["status"] == "listening"
+
+
+def test_no_signal_clears_once_real_audio_resumes(temp_backlog):
+    """The counter must reset on real audio, not just monotonically
+    accumulate — a transient dead patch should not permanently flag the
+    daemon once the mic recovers."""
+    from voice import NO_SIGNAL_CHUNKS_THRESHOLD
+
+    calls = {"n": 0}
+    class FlakyMic:
+        def read_chunk(self):
+            calls["n"] += 1
+            # dead for the first stretch, then recovers
+            if calls["n"] <= NO_SIGNAL_CHUNKS_THRESHOLD:
+                return np.zeros(CHUNK_SAMPLES, dtype=np.int16)
+            return np.random.default_rng(1).integers(
+                -5000, 5000, CHUNK_SAMPLES, dtype=np.int16)
+        def close(self):
+            pass
+
+    wake = FakeWakeModel()
+    run_voice_daemon(temp_backlog, mic=FlakyMic(), wake_model=wake,
+                     whisper_model=FakeWhisperModel(), status_interval_seconds=0,
+                     max_iterations=NO_SIGNAL_CHUNKS_THRESHOLD + 5)
+
+    assert temp_backlog.read_voice_status()["status"] == "listening"
+
+
+def test_mute_resets_the_no_signal_counter_on_unmute(temp_backlog):
+    """A stale near-threshold count built up BEFORE a mute must not
+    immediately flag no_signal the instant the daemon is unmuted again —
+    one continuous run (a fresh call to run_voice_daemon always starts
+    its own counter at 0 regardless, so this has to happen within a
+    single run to mean anything): unmuted long enough to nearly reach
+    the threshold (23 of 25), muted for 2 iterations, then unmuted again
+    for a few more. Without the reset-on-mute line this would resume
+    from 23 and cross the threshold within 2 more reads; with it, it
+    starts over from 0."""
+    from voice import NO_SIGNAL_CHUNKS_THRESHOLD
+    call_count = {"n": 0}
+
+    def fake_is_muted():
+        call_count["n"] += 1
+        return NO_SIGNAL_CHUNKS_THRESHOLD - 2 < call_count["n"] <= NO_SIGNAL_CHUNKS_THRESHOLD
+    temp_backlog.is_voice_muted = fake_is_muted
+
+    wake = FakeWakeModel()
+    mic = FakeMic(amplitude=0)
+
+    run_voice_daemon(temp_backlog, mic=mic, wake_model=wake,
+                     whisper_model=FakeWhisperModel(), status_interval_seconds=0,
+                     max_iterations=NO_SIGNAL_CHUNKS_THRESHOLD + 3)
+
+    assert temp_backlog.read_voice_status()["status"] == "listening"
+
+
+# --- ALSA capture startup fix (§16 follow-up, 2026-07-30) -------------------------
+
+def test_ensure_alsa_capture_unmuted_fixes_a_muted_card(monkeypatch):
+    """Regression guard for a real bug caught live 2026-07-30: a first
+    version of this fix used "unmute" as the amixer keyword, which this
+    hardware's driver rejects for the Capture simple-control (only "cap"/
+    "nocap" work here) — the fix logged success but the mic stayed
+    muted. This test pins the ACTUAL working keyword, and the live-
+    verification test below pins the self-check that caught it."""
+    from voice import _ensure_alsa_capture_unmuted
+    calls = []
+
+    class FakeCompleted:
+        def __init__(self, stdout=""):
+            self.stdout = stdout
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if "sget" in cmd and cmd[-1] == "Capture":
+            # first sget (pre-fix check) says muted; the SECOND sget
+            # (post-fix verification) says fixed — simulates the fix
+            # genuinely working, distinct from the "still muted" test below
+            sget_calls = [c for c in calls if "sget" in c]
+            if len(sget_calls) == 1:
+                return FakeCompleted(stdout="Front Left: Capture 0 [0%] [off]")
+            return FakeCompleted(stdout="Front Left: Capture 50 [79%] [on]")
+        return FakeCompleted()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    _ensure_alsa_capture_unmuted()
+
+    assert any(cmd[-1] == "cap" for cmd in calls)   # the correct keyword, not "unmute"
+    assert sum(1 for c in calls if "sget" in c) == 2   # pre-check AND post-fix verification
+
+
+def test_ensure_alsa_capture_unmuted_logs_error_when_fix_does_not_take(monkeypatch, caplog):
+    """The exact scenario caught live: the fix is attempted, but the card
+    is STILL muted afterward. Must be a loud, distinct log entry — not
+    silently reported as success."""
+    import logging
+    from voice import _ensure_alsa_capture_unmuted
+
+    def fake_run(cmd, **kwargs):
+        class FakeCompleted:
+            stdout = "Front Left: Capture 0 [0%] [off]"   # muted, always — the fix never takes
+        return FakeCompleted()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    with caplog.at_level(logging.ERROR, logger="nova"):
+        _ensure_alsa_capture_unmuted()
+
+    assert any("STILL muted" in r.message for r in caplog.records)
+
+
+def test_ensure_alsa_capture_unmuted_is_a_noop_when_already_unmuted(monkeypatch):
+    from voice import _ensure_alsa_capture_unmuted
+    calls = []
+
+    class FakeCompleted:
+        def __init__(self, stdout=""):
+            self.stdout = stdout
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return FakeCompleted(stdout="Front Left: Capture 50 [79%] [on]")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    _ensure_alsa_capture_unmuted()
+
+    assert len(calls) == 1              # only the read check — no fix/volume/verify calls
+    assert not any(cmd[-1] == "cap" for cmd in calls)
+
+
+def test_ensure_alsa_capture_unmuted_never_raises_on_failure(monkeypatch):
+    """Best-effort only — a broken/missing amixer must not prevent the
+    daemon from starting."""
+    from voice import _ensure_alsa_capture_unmuted
+
+    def fake_run(cmd, **kwargs):
+        raise FileNotFoundError("amixer: command not found")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    _ensure_alsa_capture_unmuted()   # must not raise
+
+
 # --- backlog.py: independent writers on one shared row ---------------------------
 
 def test_voice_status_and_mute_are_independent_writers(temp_backlog):
