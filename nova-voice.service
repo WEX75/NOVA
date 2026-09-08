@@ -9,9 +9,10 @@
 # fresh elsewhere). Without it, `import sounddevice` raises
 # OSError('PortAudio library not found') and this service crash-loops.
 #
-# Wake phrase is "Hey Jarvis" — NOT "Hey NOVA" (see project guide §16 for
-# why: openWakeWord ships only a few generic pre-trained models, a
-# custom "Hey NOVA" model was out of scope).
+# Wake phrase is "Hey NOVA" — a custom-trained model (models/hey_nova.onnx,
+# see project guide §16 for the training approach and measured accuracy/
+# recall/FP-rate) that replaced the stock "Hey Jarvis" model. Set
+# NOVA_WAKEWORD_MODEL_PATH to override (e.g. roll back to hey_jarvis).
 #
 # Same user-scope reasoning as nova.service (project guide §11): real
 # microphone access needs the user's live audio session (PipeWire/

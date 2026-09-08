@@ -216,9 +216,18 @@ class RealMicSource:
 
 
 def _default_wakeword_model_path() -> str:
-    import openwakeword
-    return os.path.join(os.path.dirname(openwakeword.__file__),
-                        "resources", "models", "hey_jarvis_v0.1.onnx")
+    """Custom-trained "Hey NOVA" model (§16 follow-up, 2026-08-10/11) —
+    replaces the stock hey_jarvis_v0.1.onnx default. NOVA_WAKEWORD_MODEL_PATH
+    overrides this (e.g. to roll back to the stock model: pass
+    openwakeword's own hey_jarvis_v0.1.onnx path). See project guide §16 for
+    the training approach and measured accuracy/recall/FP-rate — the
+    model deliberately trained "hey jarvis" as a negative, so it should
+    not fire on the old phrase."""
+    override = os.environ.get("NOVA_WAKEWORD_MODEL_PATH")
+    if override:
+        return override
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "models", "hey_nova.onnx")
 
 
 def _load_models(wakeword_model_path: Optional[str], whisper_model_size: str):
