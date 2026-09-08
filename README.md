@@ -61,7 +61,7 @@ Every node speaks a single typed contract: it receives `NovaState`, returns a **
 
 ## Engineering details worth highlighting
 
-These are the parts that took real investigation rather than following a tutorial — documented as findings, not assumptions, in `project guide`:
+These are the parts that took real investigation rather than following a tutorial, backed by measurement rather than assumption:
 
 - **A silent context-truncation bug.** Ollama's default context window quietly front-truncates prompts with no error — a ~6000-token prompt was capped to 2050 evaluated tokens and the model confidently answered from the surviving tail. Traced, measured, and fixed by explicitly setting `num_ctx` on every local call.
 - **Overflow isn't "just the excess."** When a prompt does exceed the context window, llama.cpp's context-shift discards to roughly `num_ctx / 2`, not the minimum needed — verified at two different context sizes. Every local-call budget in the codebase is sized with a measured margin against that specific cliff, not against the nominal ceiling.
