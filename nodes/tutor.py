@@ -50,7 +50,7 @@ spare. Measured cause: a large prefill as the FIRST call after a model
 by testing a trivial prompt) or warm prefill of the SAME large prompt
 (0.3-0.4s) — almost certainly one-time kernel/shader compilation on first
 use of a given batch shape, consistent with gfx1103 being off ROCm's
-official support list (project guide §3). Generation itself measured ~7.8
+official support list. Generation itself measured ~7.8
 tok/s warm. DEFAULT_TIMEOUT=120s was sized for the executor's short
 JSON-plan calls (§14: ~13-27s observed) and was never going to cover
 tutor's legitimately larger prompts plus long-form prose replies —

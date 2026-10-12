@@ -102,7 +102,7 @@ class QuotaTracker(BaseModel):
         """Account one cloud request: returns a NEW tracker with the counters
         reset first if the UTC day rolled over, then the provider's counter
         incremented. This is the ONLY place a rollover is written; nodes put
-        the returned tracker in their partial state update (project guide §4/§8).
+        the returned tracker in their partial state update.
         To disable a provider outright (e.g. missing API key), zero its
         daily_limit — counters do not survive midnight, limits do."""
         fresh = self.model_copy(deep=True)

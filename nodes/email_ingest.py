@@ -1,5 +1,5 @@
 """
-NOVA — Email ingestion (project guide §7 boundary).
+NOVA — Email ingestion.
 
 Turns unread Outlook messages into backlog tasks + NovaState objects with
 source="email" and privacy_sensitive=True — the router therefore sends them
@@ -73,7 +73,7 @@ def ingest_email(msg: EmailMessage, backlog: Backlog) -> NovaState:
         task_id=task_id,
         goal=goal,
         source="email",
-        privacy_sensitive=True,           # local Executor only (project guide §7)
+        privacy_sensitive=True,           # local Executor only
         status=TaskStatus.PENDING,
         requires_human_approval=flagged,  # instruction-like -> halt at human gate
         memory_refs=[str(body_path)],     # the ONLY provenance-legal artifact

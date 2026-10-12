@@ -10,11 +10,11 @@
 # OSError('PortAudio library not found') and this service crash-loops.
 #
 # Wake phrase is "Hey NOVA" — a custom-trained model (models/hey_nova.onnx,
-# see project guide §16 for the training approach and measured accuracy/
+# see the model's training notes for measured accuracy/
 # recall/FP-rate) that replaced the stock "Hey Jarvis" model. Set
 # NOVA_WAKEWORD_MODEL_PATH to override (e.g. roll back to hey_jarvis).
 #
-# Same user-scope reasoning as nova.service (project guide §11): real
+# Same user-scope reasoning as nova.service: real
 # microphone access needs the user's live audio session (PipeWire/
 # PulseAudio via PortAudio), which only exists after login — a system-
 # level unit cannot reach it, exactly like os_action app launches need
@@ -22,7 +22,7 @@
 #
 # No Ollama dependency, no preflight, no StartLimit coupling: this daemon
 # never calls a model itself — it only writes tasks (source="voice") for
-# the loop to pick up and drive later. See project guide §16.
+# the loop to pick up and drive later.
 
 [Unit]
 Description=NOVA voice daemon (wake-word -> local STT -> task)

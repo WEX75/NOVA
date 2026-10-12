@@ -1,4 +1,4 @@
-"""Permission-tier enforcement at the tool boundary (project guide §5/§7):
+"""Permission-tier enforcement at the tool boundary:
 autonomous tiers pass, gated tiers require real human approval, os_action
 args need provenance, destructive needs a Critic pass, and the allow-list
 in os_actions is a hard wall."""

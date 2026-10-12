@@ -6,7 +6,7 @@
 #
 # Binds 127.0.0.1 only (hard-coded in dashboard.py). Reads the same SQLite
 # DB as the loop; approve/reject buttons write approval_decisions — the
-# same path as `nova approve` (project guide §13). No model access, no
+# same path as `nova approve`. No model access, no
 # preflight, so no StartLimit coupling with Ollama is needed here.
 
 [Unit]

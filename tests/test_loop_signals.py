@@ -1,5 +1,5 @@
-"""Graceful shutdown under REAL signals, in a REAL process (project guide §6 in
-loop mode): SIGTERM mid-task must leave a durable, resumable checkpoint, and
+"""Graceful shutdown under REAL signals in a real loop process: SIGTERM
+mid-task must leave a durable, resumable checkpoint, and
 a fresh process must pick the task up where it stopped — the same guarantee
 test_graph_interrupt.py proves in-process, here proven across an actual
 process boundary with actual signal delivery.

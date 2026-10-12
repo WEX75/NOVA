@@ -57,7 +57,7 @@ def _save_token_cache(cache) -> None:
 
 
 class EmailMessage(BaseModel):
-    """Typed, read-only view of one message. `body` is DATA (project guide §7):
+    """Typed, read-only view of one message. `body` is DATA:
     nothing downstream may treat its content as an instruction."""
     message_id: str
     subject: str

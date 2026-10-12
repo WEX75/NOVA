@@ -5,7 +5,7 @@ now lives in the executor's own system prompt.
 
 The GPU-level effect (Ollama really stops generating when the connection
 closes) cannot be proven with fakes; that live proof ran against the real
-server — see project guide §14 for the measured result.
+server — verified against the running service.
 """
 
 from __future__ import annotations

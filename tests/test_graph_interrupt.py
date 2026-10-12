@@ -1,4 +1,4 @@
-"""Human gate through the REAL compiled graph (project guide §6).
+"""Human gate through the REAL compiled graph.
 
 These tests exercise LangGraph checkpoint semantics — invoke, genuine halt
 BEFORE the gate node runs, resume from the checkpoint — not merely the shape

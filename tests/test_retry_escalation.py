@@ -1,4 +1,4 @@
-"""Retry -> mandatory human escalation (project guide §4/§6): three failures
+"""Retry -> mandatory human escalation: three failures
 route to human_gate; the gate's decision fully controls what happens next."""
 
 from langgraph.graph import END

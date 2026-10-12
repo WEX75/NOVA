@@ -1,10 +1,10 @@
 """
-NOVA — Long-term memory (Chroma, local embedded, project guide §9).
+NOVA — Long-term memory (Chroma, local embedded).
 
 RAG recall of past business updates and preferences. Fully local: persistent
 client + nomic-embed-text on the local Ollama (via llm.embed — only llm.py
 knows provider strings), so memory content never leaves the machine and
-embedding rides the Vulkan GPU path (project guide §3). NovaState carries only
+embedding rides the Vulkan GPU path. NovaState carries only
 the returned ids/snippets in memory_refs, never full documents.
 """
 

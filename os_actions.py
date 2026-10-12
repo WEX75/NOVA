@@ -1,7 +1,7 @@
 """
 NOVA — OS Action Tool (app launching)
 
-Implements the `os_action` permission tier from project guide: Nova can launch
+Implements the `os_action` permission tier: Nova can launch
 apps from a fixed allow-list, mapped to non-shell commands. It cannot
 construct or execute an arbitrary command string. Opening a terminal or
 shell is deliberately excluded here — that belongs behind the `destructive`

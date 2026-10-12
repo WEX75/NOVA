@@ -1202,7 +1202,7 @@ function renderVoice(voice) {
   } else if (voice.status === "no_signal") {
     // Distinct from muted (owner choice) and error (a crash): the
     // process is fine but no real audio is reaching it — e.g. an OS-
-    // level mic mute (project guide §16 has a known real cause on this box).
+    // level mic mute.
     pill.classList.add("no-signal");
     text.textContent = "voice: no mic signal — check system mute/volume";
   } else if (voice.status === "listening") {

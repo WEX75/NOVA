@@ -1,5 +1,5 @@
 """
-NOVA — SecretStore: the single gateway to credentials (project guide hardening).
+NOVA — SecretStore: the single gateway to credentials.
 
 Wraps the `keyring` package (Secret Service backend on this desktop). No
 NOVA component reads os.environ or a plaintext file for a credential

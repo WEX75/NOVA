@@ -1,4 +1,4 @@
-"""Quota self-monitoring (project guide §8): routing falls back to the local
+"""Quota self-monitoring: routing falls back to the local
 Executor BEFORE a 429, every cloud call bumps the right counter, and the
 per-day counters self-heal across the UTC midnight boundary."""
 

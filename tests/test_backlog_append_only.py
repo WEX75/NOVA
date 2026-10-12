@@ -1,4 +1,4 @@
-"""Episodic log is append-only in two independent layers (project guide §4/§9),
+"""Episodic log is append-only in two independent layers,
 neither of which is convention in app code:
   connection level — the authorizer on the application's own connection
   refuses to even PREPARE an UPDATE/DELETE ("not authorized");

@@ -1,4 +1,4 @@
-"""Headless approval (project guide §13): under systemd there is no console —
+"""Headless approval: under systemd there is no console —
 decisions arrive as rows in approval_decisions written by one-shot
 `nova approve/reject` processes, the loop applies them on its tick cadence,
 and a desktop notification (sanitized) alerts the owner when a task parks

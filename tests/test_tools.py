@@ -1,7 +1,7 @@
 """tools.py dispatch-layer safety: write_file must never silently accept
 non-string content. A hallucinated or malformed tool call with
 content=null (observed live from qwen2.5-coder under an unrelated
-long-form-prompt failure mode — project guide long-form investigation) must
+long-form-prompt failure mode) must
 be a loud failure, not a silent truncation of a real, possibly valuable,
 existing file down to empty."""
 

@@ -13,6 +13,7 @@ workspace/
 .ms_token_cache.json
 
 # local editor/agent settings
+
 checkpoints.db-shm
 checkpoints.db-wal
 nova.db-shm

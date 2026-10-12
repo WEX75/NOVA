@@ -1,5 +1,5 @@
 """
-NOVA — Permission tiers and enforcement (project guide §5–§7).
+NOVA — Permission tiers and enforcement.
 
 This is checked at the TOOL boundary inside the Executor, not merely at
 planning time — so a mis-planned or prompt-injected request still cannot
@@ -64,7 +64,7 @@ def known_artifacts(state: NovaState) -> set[str]:
     """Values that legitimately exist in NovaState: saved attachments /
     memory refs, and outputs of prior successful tool calls (e.g. a report
     the Executor just wrote). Raw email body text is never in this set —
-    that is the project guide §7 provenance boundary."""
+    that is the project provenance boundary."""
     artifacts: set[str] = set(state.memory_refs)
     for step in state.history:
         for tc in step.tool_calls:
@@ -104,14 +104,14 @@ def check_permission(state: NovaState, tool_name: str, arg: str | None = None) -
         return PermissionDecision(
             allowed=False, tier=tier,
             reason=f"os_action arg {arg!r} has no provenance in NovaState "
-                   "(not a saved attachment or generated artifact) — project guide §7",
+                   "(not a saved attachment or generated artifact) — provenance policy",
         )
 
     if tier is PermissionTier.DESTRUCTIVE and not _critic_passed_current_subtask(state):
         return PermissionDecision(
             allowed=False, tier=tier,
             reason=f"destructive tool '{tool_name}' requires a Critic pass on the "
-                   "current subtask before human confirmation counts — project guide §5",
+                   "current subtask before human confirmation counts — permission policy",
         )
 
     return PermissionDecision(allowed=True, tier=tier, reason="approved by human"

@@ -114,7 +114,7 @@ def test_manual_goal_runs_the_whole_pipeline(temp_backlog, temp_workspace,
     assert launched == [["xdg-open", report_path]]      # allow-listed argv, no shell
     assert len(prompts) == 1 and "open the finished report" in prompts[0]
 
-    # --- and the audit trail can reconstruct all of it (project guide §4) ---
+    # --- and the audit trail can reconstruct all of it ---
     entries = temp_backlog.log_entries(task_id=task.task_id)
     kinds = [e["actor"] for e in entries if e["action_type"] == "llm_call"]
     assert kinds == ["director", "researcher", "executor", "critic", "executor"]

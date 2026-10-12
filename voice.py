@@ -163,7 +163,7 @@ def _ensure_alsa_capture_unmuted() -> None:
         if "[off]" not in out.stdout:
             return  # already unmuted — nothing to do
         log.warning("voice daemon: ALSA capture on card %s was muted at "
-                   "startup — unmuting (see project guide §16: this reverts "
+                   "startup — unmuting (this reverts "
                    "on every reboot unless `alsactl store` is run)", card)
         # "cap"/"nocap" are the ALSA simple-control keywords for this
         # capture switch on this hardware — "mute"/"unmute" both returned
@@ -182,14 +182,14 @@ def _ensure_alsa_capture_unmuted() -> None:
             log.error("voice daemon: attempted to unmute ALSA capture on "
                      "card %s but it is STILL muted — the daemon will run "
                      "but hear nothing; fix by hand with "
-                     "`amixer -c %s sset Capture cap` (project guide §16)",
+                     "`amixer -c %s sset Capture cap`",
                      card, card)
         else:
             log.info("voice daemon: ALSA capture on card %s unmuted successfully", card)
     except Exception as e:  # noqa: BLE001 — best-effort only, see docstring
         log.warning("voice daemon: could not check/fix ALSA capture mute "
                    "(%s) — if voice seems dead with no errors, check "
-                   "`amixer -c %s get Capture` by hand (project guide §16)",
+                   "`amixer -c %s get Capture` by hand",
                    e, card)
 
 
@@ -219,8 +219,8 @@ def _default_wakeword_model_path() -> str:
     """Custom-trained "Hey NOVA" model (§16 follow-up, 2026-08-10/11) —
     replaces the stock hey_jarvis_v0.1.onnx default. NOVA_WAKEWORD_MODEL_PATH
     overrides this (e.g. to roll back to the stock model: pass
-    openwakeword's own hey_jarvis_v0.1.onnx path). See project guide §16 for
-    the training approach and measured accuracy/recall/FP-rate — the
+    openwakeword's own hey_jarvis_v0.1.onnx path). The training approach
+    and measured accuracy/recall/FP-rate are documented with the model — the
     model deliberately trained "hey jarvis" as a negative, so it should
     not fire on the old phrase."""
     override = os.environ.get("NOVA_WAKEWORD_MODEL_PATH")

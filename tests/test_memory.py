@@ -1,4 +1,4 @@
-"""Long-term memory (project guide §9): remember/recall roundtrip against a real
+"""Long-term memory: remember/recall roundtrip against a real
 embedded Chroma store, and the Executor's read-only memory_recall tool path.
 A deterministic bag-of-words embedder replaces the default ONNX one so tests
 stay offline and stable."""

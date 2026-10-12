@@ -1,5 +1,5 @@
 """
-NOVA — Task backlog + append-only episodic log (SQLite, project guide §9).
+NOVA — Task backlog + append-only episodic log (SQLite).
 
 Two tables in one local DB:
   tasks         — the work queue; rows update as status changes.
@@ -101,7 +101,7 @@ class TaskRecord(BaseModel):
 
 class EpisodicEntry(BaseModel):
     """One external action or lifecycle event, with enough detail to
-    reconstruct why it happened (project guide §4)."""
+    reconstruct why it happened."""
     task_id: Optional[str]
     actor: str          # agent role or "system" / "human"
     action_type: str    # e.g. "llm_call", "file_write", "app_launch", "email_fetch"
@@ -300,7 +300,7 @@ class Backlog:
         row = self._conn.execute("SELECT muted FROM voice_status WHERE id=1").fetchone()
         return bool(row and row["muted"])
 
-    # --- headless approval decisions (project guide §13) ---
+    # --- headless approval decisions ---
     # One-shot `nova approve/reject` processes write here; the running loop
     # polls and applies on its tick cadence. No stdin involved anywhere.
 

@@ -1,4 +1,4 @@
-"""THE injection test (project guide §7/§10): an email body containing
+"""THE injection test: an email body containing
 instruction-like text must never result in auto-executed code or an
 auto-launched app — at ingestion, at routing, and at the tool boundary."""
 

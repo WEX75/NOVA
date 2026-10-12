@@ -4,7 +4,7 @@
 
 **An autonomous, local-first business assistant** that reads email, plans and critiques its own work across a multi-model pipeline, and executes tasks — while treating anything destructive, anything touching the OS, and anything arriving as untrusted input (email) as requiring explicit human sign-off.
 
-Built solo, end-to-end: state machine, model routing, permission system, secrets handling, systemd deployment, a wake-word voice pipeline, and a local dashboard — all on consumer hardware with no cloud infrastructure beyond two free-tier LLM APIs.
+The project brings together a state machine, model routing, permission system, secrets handling, systemd deployment, a wake-word voice pipeline, and a local dashboard — all on consumer hardware with no cloud infrastructure beyond two free-tier LLM APIs.
 
 > See [`TECH_STACK.md`](TECH_STACK.md) for the full technology inventory.
 

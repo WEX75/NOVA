@@ -1,8 +1,8 @@
 """
 NOVA — Shared node plumbing (not orchestration logic).
 
-Every node uses these three pieces so the project guide invariants hold
-uniformly: an AgentStep logged per run (§4), the quota counter bumped after
+Every node uses these three pieces so the project invariants hold
+uniformly: an AgentStep logged per run, the quota counter bumped after
 every cloud call (§4/§8), and JSON coaxed safely out of model output.
 """
 

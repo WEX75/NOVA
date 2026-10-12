@@ -63,7 +63,7 @@ def build_graph(checkpointer=None):
 
     return workflow.compile(
         checkpointer=checkpointer or MemorySaver(),
-        interrupt_before=["human_gate"],  # project guide §6 — genuine halt
+        interrupt_before=["human_gate"],  # Genuine execution halt.
     )
 
 

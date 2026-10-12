@@ -1,5 +1,5 @@
 """
-NOVA — External-action audit logging (project guide §4).
+NOVA — External-action audit logging.
 
 One function, `log_action()`, called by every node/tool at the moment an
 external effect happens (LLM API call, file write, app launch, email fetch/

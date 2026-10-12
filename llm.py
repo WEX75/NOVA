@@ -4,7 +4,7 @@ NOVA — Unified LLM interface (LiteLLM).
 Every node calls `complete()` regardless of backend. This is the ONLY module
 that knows provider strings; nodes know AgentRole, nothing else.
 
-Local backend note (project guide §3): Ollama on this machine (Radeon 780M /
+Local backend note: Ollama on this machine (Radeon 780M /
 gfx1103, not ROCm-supported) can silently fall back to slow CPU if the iGPU
 isn't picked up. The verified-working service config is OLLAMA_IGPU_ENABLE=1
 on the `ollama serve` process (see §3 — re-verify with `ollama ps` after any
@@ -53,7 +53,7 @@ class LLMAborted(RuntimeError):
     this is an owner decision, so callers must treat it as terminal — never
     retry it, never route it through llm_transport_failure."""
 
-# Long-term memory embeddings (project guide §9). Local by design: memory content
+# Long-term memory embeddings. Local by design: memory content
 # is business updates/preferences — privacy-sensitive by default — so it never
 # leaves the machine, and it rides the Vulkan GPU path Ollama already provides
 # (§3). One-time setup: `ollama pull nomic-embed-text`.
@@ -135,7 +135,7 @@ def _close_stream(stream) -> None:
 def complete(request: LLMRequest, *, timeout: Optional[float] = None,
              should_abort: Optional[Callable[[], bool]] = None) -> LLMResponse:
     """One completion, any backend. Raises on transport errors — callers
-    (nodes) own retry/escalation bookkeeping per project guide §4.
+    (nodes) own retry/escalation bookkeeping.
 
     ONE cancellation mechanism, two triggers (§14): `timeout` (wall-clock,
     DEFAULT_TIMEOUT unless overridden) and `should_abort` (an external
@@ -235,7 +235,7 @@ def assert_local_backend_ready() -> None:
     except Exception as e:  # noqa: BLE001 — any failure means "not ready"
         raise RuntimeError(
             f"Ollama not reachable at {OLLAMA_BASE}. Start the service with "
-            "OLLAMA_IGPU_ENABLE=1 (gfx1103 iGPU, see project guide §3; verify GPU "
+            "OLLAMA_IGPU_ENABLE=1 (gfx1103 iGPU; verify GPU "
             "use with `ollama ps`)."
         ) from e
 

@@ -3,7 +3,7 @@ whisper models (this project's established pattern — see conftest.py's
 fake_llm — rather than downloading real model weights on every test run).
 The real openWakeWord/faster-whisper integration was proven live and
 separately (measured CPU overhead, measured CPU contention with qwen,
-confirmed zero GPU/VRAM path on this hardware) — see project guide §16.
+confirmed zero GPU/VRAM path on this hardware).
 
 Retrigger-fix tests (2026-07-30) pass refractory_seconds=0 in most cases —
 production defaults to a real 2s wall-clock window (module docstring in
@@ -170,7 +170,7 @@ def test_near_silent_capture_skips_transcription_and_creates_no_task(temp_backlo
     is documented to hallucinate plausible text from near-silence rather
     than returning empty, so checking output alone would be the wrong
     test — see the real 'You'/'I'm not sure if I can make a video' live
-    hallucinations recorded in project guide §16)."""
+    hallucinations observed during hardware testing)."""
     wake = FakeWakeModel(trigger_on={1})
     whisper = FakeWhisperModel(text="hallucinated text that should never appear")
     mic = FakeMic(amplitude=0)   # genuine silence: rms will be exactly 0.0
@@ -201,7 +201,7 @@ def test_vad_threshold_matches_the_live_calibrated_constant():
     """Guards against silent drift: the constant used in production must
     stay the live-measured value (0.01, ~2x margin above the measured
     near-silence ceiling of 0.0044 and ~2x below measured real speech of
-    0.0197 — see project guide §16), not a value someone changes without
+    0.0197), not a value someone changes without
     re-measuring."""
     assert VAD_RMS_THRESHOLD == 0.01
 
